@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+    -webkit-font-smoothing: antialiased;
+    color: rgb(232 232 250 / 0.92);
+    background: #05060f;
+  }
+
+  body {
+    /* Soft starlight gradient. Layered radial glows over a deep navy base. */
+    background:
+      radial-gradient(
+        ellipse 80% 60% at 20% 0%,
+        rgba(124, 111, 245, 0.18),
+        transparent 60%
+      ),
+      radial-gradient(
+        ellipse 70% 60% at 85% 25%,
+        rgba(255, 179, 200, 0.1),
+        transparent 60%
+      ),
+      radial-gradient(
+        ellipse 80% 60% at 50% 100%,
+        rgba(80, 60, 180, 0.22),
+        transparent 65%
+      ),
+      #05060f;
+    background-attachment: fixed;
+    overflow-x: hidden;
+  }
+
+  /* Prevent iOS rubber-banding & let the app feel native when installed. */
+  html {
+    overscroll-behavior: none;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .glass-strong {
+    background: rgba(255, 255, 255, 0.07);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Range input styled to match the soft palette. */
+  input[type="range"].soothr-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    background: linear-gradient(
+      to right,
+      rgba(185, 167, 255, 0.9) 0%,
+      rgba(185, 167, 255, 0.9) var(--val, 50%),
+      rgba(255, 255, 255, 0.12) var(--val, 50%),
+      rgba(255, 255, 255, 0.12) 100%
+    );
+    outline: none;
+  }
+  input[type="range"].soothr-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: white;
+    box-shadow:
+      0 0 0 4px rgba(185, 167, 255, 0.2),
+      0 6px 20px rgba(124, 111, 245, 0.4);
+    cursor: pointer;
+    border: none;
+  }
+  input[type="range"].soothr-slider::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: white;
+    box-shadow:
+      0 0 0 4px rgba(185, 167, 255, 0.2),
+      0 6px 20px rgba(124, 111, 245, 0.4);
+    cursor: pointer;
+    border: none;
+  }
+}
+
+/* Night-mode dimmer veil. Triggered by data-night="on" on <html>. */
+html[data-night="on"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: black;
+  opacity: 0.7;
+  pointer-events: none;
+  z-index: 40;
+  transition: opacity 400ms ease;
+}
+html[data-night="on"] .above-veil {
+  position: relative;
+  z-index: 50;
+}
