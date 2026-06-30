@@ -89,7 +89,7 @@ export default function HomePage() {
         </p>
       </section>
 
-      <section className="above-veil mx-auto mt-10 grid max-w-4xl grid-cols-2 gap-3 px-5 sm:grid-cols-3 sm:gap-4 md:grid-cols-4">
+      <section className="above-veil mx-auto mt-10 grid max-w-4xl grid-cols-3 gap-3 px-5 sm:grid-cols-5 sm:gap-4">
         {SOUNDS.map((s) => (
           <SoundCard
             key={s.id}
