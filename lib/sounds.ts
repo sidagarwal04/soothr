@@ -10,6 +10,8 @@ export type SoundId =
   | "stream"
   | "ocean"
   | "crickets"
+  | "forest"
+  | "wind"
   | "heartbeat"
   | "womb"
   | "lullaby"
@@ -76,30 +78,44 @@ export const SOUNDS: SoundMeta[] = [
   {
     id: "rain",
     label: "Rain",
-    description: "Gentle pattering rainfall on a window.",
+    description: "Gentle, steady rainfall — a real field recording.",
     emoji: "❅",
     accent: "from-cyan-400/30 to-blue-600/20",
   },
   {
     id: "stream",
     label: "Stream",
-    description: "A small brook tumbling over stones.",
+    description: "A trickling brook with distant birdsong.",
     emoji: "≈",
     accent: "from-cyan-300/30 to-teal-600/20",
   },
   {
     id: "ocean",
     label: "Ocean Waves",
-    description: "Slow swells, like the shore at dusk.",
+    description: "Waves rolling onto a calm beach.",
     emoji: "～",
     accent: "from-teal-400/30 to-blue-700/20",
   },
   {
     id: "crickets",
     label: "Crickets",
-    description: "A warm evening porch, soft insect song.",
+    description: "A warm summer night of chirping crickets.",
     emoji: "✣",
     accent: "from-emerald-400/30 to-green-700/20",
+  },
+  {
+    id: "forest",
+    label: "Forest",
+    description: "Birdsong in a peaceful woodland morning.",
+    emoji: "❧",
+    accent: "from-green-400/30 to-emerald-700/20",
+  },
+  {
+    id: "wind",
+    label: "Wind",
+    description: "Soft wind drifting through the trees.",
+    emoji: "❋",
+    accent: "from-slate-300/30 to-cyan-700/20",
   },
   {
     id: "heartbeat",

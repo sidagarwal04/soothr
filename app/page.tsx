@@ -10,10 +10,13 @@ import { SoundCard } from "@/components/SoundCard";
 import { PlayerBar } from "@/components/PlayerBar";
 import { SleepTimer } from "@/components/SleepTimer";
 import { NightModeToggle } from "@/components/NightModeToggle";
+import { SoundTuner } from "@/components/SoundTuner";
+import { SafetyHint } from "@/components/SafetyHint";
 
 export default function HomePage() {
   const engine = useAudioEngine();
   const [night, setNight] = useState(false);
+  const [tunerOpen, setTunerOpen] = useState(false);
 
   useWakeLock(engine.isPlaying);
 
@@ -87,6 +90,7 @@ export default function HomePage() {
             "Pick a sound below. It will loop gently until you stop it."
           )}
         </p>
+        <SafetyHint active={engine.isPlaying} />
       </section>
 
       <section className="above-veil mx-auto mt-10 grid max-w-4xl grid-cols-3 gap-3 px-5 sm:grid-cols-5 sm:gap-4">
@@ -110,12 +114,25 @@ export default function HomePage() {
         />
       </section>
 
+      <SoundTuner
+        open={tunerOpen && engine.isPlaying}
+        lowPass={engine.lowPass}
+        lowShelf={engine.lowShelf}
+        highShelf={engine.highShelf}
+        onLowPassChange={engine.setLowPass}
+        onLowShelfChange={engine.setLowShelf}
+        onHighShelfChange={engine.setHighShelf}
+        onReset={engine.resetTuning}
+      />
+
       <PlayerBar
         playing={engine.isPlaying}
         currentLabel={currentSound?.label ?? null}
         volume={engine.volume}
         onVolumeChange={engine.setVolume}
         onStop={engine.stop}
+        tunerOpen={tunerOpen}
+        onToggleTuner={() => setTunerOpen((o) => !o)}
       />
     </main>
   );

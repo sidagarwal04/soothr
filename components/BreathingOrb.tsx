@@ -19,6 +19,8 @@ const HUE_BY_SOUND: Record<SoundId, [string, string]> = {
   stream: ["#b6f0e3", "#1f8a8a"],
   ocean: ["#9ff0d8", "#3d72c4"],
   crickets: ["#c8f7c5", "#2f6e3a"],
+  forest: ["#bff0b8", "#2f7e3a"],
+  wind: ["#d4ecf5", "#3a7fa0"],
   heartbeat: ["#ffb1c2", "#e0506e"],
   womb: ["#e1b6ff", "#7a3fb8"],
   lullaby: ["#d4b8ff", "#5e3da8"],

@@ -1,14 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { AudioEngine } from "./audioEngine";
+import {
+  AudioEngine,
+  DEFAULT_VOLUME,
+  DEFAULT_LOW_PASS_HZ,
+  DEFAULT_LOW_SHELF_DB,
+  DEFAULT_HIGH_SHELF_DB,
+} from "./audioEngine";
 import type { SoundId } from "./sounds";
 
 export function useAudioEngine() {
   const engineRef = useRef<AudioEngine | null>(null);
   const [current, setCurrent] = useState<SoundId | null>(null);
   const [lastPlayed, setLastPlayed] = useState<SoundId | null>(null);
-  const [volume, setVolumeState] = useState(0.5);
+  const [volume, setVolumeState] = useState(DEFAULT_VOLUME);
+  const [lowPass, setLowPassState] = useState(DEFAULT_LOW_PASS_HZ);
+  const [lowShelf, setLowShelfState] = useState(DEFAULT_LOW_SHELF_DB);
+  const [highShelf, setHighShelfState] = useState(DEFAULT_HIGH_SHELF_DB);
   const [timerMinutes, setTimerMinutes] = useState<number | null>(null);
   const [timerEndsAt, setTimerEndsAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -46,6 +55,30 @@ export function useAudioEngine() {
   const setVolume = useCallback((v: number) => {
     engineRef.current?.setVolume(v);
     setVolumeState(v);
+  }, []);
+
+  const setLowPass = useCallback((hz: number) => {
+    engineRef.current?.setLowPass(hz);
+    setLowPassState(hz);
+  }, []);
+
+  const setLowShelf = useCallback((db: number) => {
+    engineRef.current?.setLowShelf(db);
+    setLowShelfState(db);
+  }, []);
+
+  const setHighShelf = useCallback((db: number) => {
+    engineRef.current?.setHighShelf(db);
+    setHighShelfState(db);
+  }, []);
+
+  const resetTuning = useCallback(() => {
+    engineRef.current?.setLowPass(DEFAULT_LOW_PASS_HZ);
+    engineRef.current?.setLowShelf(DEFAULT_LOW_SHELF_DB);
+    engineRef.current?.setHighShelf(DEFAULT_HIGH_SHELF_DB);
+    setLowPassState(DEFAULT_LOW_PASS_HZ);
+    setLowShelfState(DEFAULT_LOW_SHELF_DB);
+    setHighShelfState(DEFAULT_HIGH_SHELF_DB);
   }, []);
 
   const setTimer = useCallback(
@@ -93,6 +126,13 @@ export function useAudioEngine() {
     isPlaying: current !== null,
     volume,
     setVolume,
+    lowPass,
+    setLowPass,
+    lowShelf,
+    setLowShelf,
+    highShelf,
+    setHighShelf,
+    resetTuning,
     play,
     stop,
     fadeStop,

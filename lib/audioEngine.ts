@@ -25,15 +25,70 @@ interface BuildResult {
 
 const FADE = 0.6; // seconds — gentle attack/release so playback feels soft
 
+/** Defaults chosen to be safe for infant ears at typical phone-speaker SPL.
+ * The volume default (0.3) is roughly -10 dB of digital gain — about half
+ * as loud as max perceptually. The EQ defaults are "flat" so the unfiltered
+ * sounds come through unchanged until the user opens the Tune panel. */
+export const DEFAULT_VOLUME = 0.3;
+export const DEFAULT_LOW_PASS_HZ = 20_000;
+export const DEFAULT_LOW_SHELF_DB = 0;
+export const DEFAULT_HIGH_SHELF_DB = 0;
+export const LOW_SHELF_FREQ_HZ = 250;
+export const HIGH_SHELF_FREQ_HZ = 4000;
+export const MIN_LOW_PASS_HZ = 500;
+export const MAX_LOW_PASS_HZ = 20_000;
+export const SHELF_GAIN_RANGE_DB = 12; // ±12 dB
+
+/**
+ * Sounds backed by real recordings rather than synthesis. Each is a compact,
+ * loudness-normalized, seamlessly-looping clip (~40s) sourced from public-domain
+ * (CC0) field recordings — see public/sounds/CREDITS.md. Everything not listed
+ * here is still generated procedurally.
+ */
+export const SAMPLE_URLS: Partial<Record<SoundId, string>> = {
+  rain: "/sounds/rain.mp3",
+  ocean: "/sounds/ocean.mp3",
+  stream: "/sounds/stream.mp3",
+  forest: "/sounds/forest.mp3",
+  crickets: "/sounds/crickets.mp3",
+  wind: "/sounds/wind.mp3",
+};
+
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  private lowShelf: BiquadFilterNode | null = null;
+  private highShelf: BiquadFilterNode | null = null;
+  private lowPass: BiquadFilterNode | null = null;
+  private dcBlock: BiquadFilterNode | null = null;
+  private limiter: DynamicsCompressorNode | null = null;
   private active: ActiveSound | null = null;
   private currentId: SoundId | null = null;
   private lastSoundId: SoundId | null = null;
-  private volume = 0.5;
+  private volume = DEFAULT_VOLUME;
   private sleepTimer: ReturnType<typeof setTimeout> | null = null;
   private keepAliveAudio: HTMLAudioElement | null = null;
+  private sampleCache = new Map<string, AudioBuffer>();
+
+  /** Fetch + decode a recorded loop, caching the decoded buffer by URL so it
+   *  only downloads once per session. */
+  private async loadSample(url: string): Promise<AudioBuffer> {
+    const cached = this.sampleCache.get(url);
+    if (cached) return cached;
+    const ctx = this.ensureContext();
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to load ${url}: ${res.status}`);
+    const arrayBuf = await res.arrayBuffer();
+    const decoded = await ctx.decodeAudioData(arrayBuf);
+    this.sampleCache.set(url, decoded);
+    return decoded;
+  }
+
+  /** Warm the cache for a sound without playing it (e.g. on hover/tap-intent). */
+  preload(id: SoundId) {
+    const url = SAMPLE_URLS[id];
+    if (url) void this.loadSample(url).catch(() => {});
+  }
 
   /** Lazily create the AudioContext on first user gesture. */
   private ensureContext(): AudioContext {
@@ -45,7 +100,48 @@ export class AudioEngine {
       this.ctx = new Ctx();
       this.master = this.ctx.createGain();
       this.master.gain.value = this.volume;
-      this.master.connect(this.ctx.destination);
+
+      // Signal chain after master:  lowShelf → highShelf → lowPass → output.
+      // All three default to neutral pass-through; the Tune panel adjusts
+      // their AudioParams live without rebuilding the graph.
+      this.lowShelf = this.ctx.createBiquadFilter();
+      this.lowShelf.type = "lowshelf";
+      this.lowShelf.frequency.value = LOW_SHELF_FREQ_HZ;
+      this.lowShelf.gain.value = DEFAULT_LOW_SHELF_DB;
+
+      this.highShelf = this.ctx.createBiquadFilter();
+      this.highShelf.type = "highshelf";
+      this.highShelf.frequency.value = HIGH_SHELF_FREQ_HZ;
+      this.highShelf.gain.value = DEFAULT_HIGH_SHELF_DB;
+
+      this.lowPass = this.ctx.createBiquadFilter();
+      this.lowPass.type = "lowpass";
+      this.lowPass.frequency.value = DEFAULT_LOW_PASS_HZ;
+      this.lowPass.Q.value = 0.7;
+
+      // Master polish: 20 Hz high-pass strips inaudible DC/subsonic rumble
+      // that wastes headroom, and a soft DynamicsCompressor acts as a gentle
+      // limiter so EQ boosts or layered sounds can't clip the output.
+      this.dcBlock = this.ctx.createBiquadFilter();
+      this.dcBlock.type = "highpass";
+      this.dcBlock.frequency.value = 20;
+      this.dcBlock.Q.value = 0.5;
+
+      this.limiter = this.ctx.createDynamicsCompressor();
+      this.limiter.threshold.value = -3;
+      this.limiter.knee.value = 6;
+      this.limiter.ratio.value = 8;
+      this.limiter.attack.value = 0.003;
+      this.limiter.release.value = 0.12;
+
+      this.master
+        .connect(this.lowShelf)
+        .connect(this.highShelf)
+        .connect(this.lowPass)
+        .connect(this.dcBlock)
+        .connect(this.limiter)
+        .connect(this.ctx.destination);
+
       this.initSilentKeepAlive();
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
@@ -120,6 +216,42 @@ export class AudioEngine {
     }
   }
 
+  /** Low-pass cutoff in Hz. Lower = more muffled / womb-like. */
+  setLowPass(freqHz: number) {
+    if (!this.lowPass || !this.ctx) return;
+    const safe = Math.max(
+      MIN_LOW_PASS_HZ,
+      Math.min(MAX_LOW_PASS_HZ, freqHz),
+    );
+    this.lowPass.frequency.cancelScheduledValues(this.ctx.currentTime);
+    this.lowPass.frequency.linearRampToValueAtTime(
+      safe,
+      this.ctx.currentTime + 0.05,
+    );
+  }
+
+  /** Bass shelf gain in dB. Boosts/cuts below ~250 Hz. */
+  setLowShelf(gainDb: number) {
+    if (!this.lowShelf || !this.ctx) return;
+    const safe = Math.max(-SHELF_GAIN_RANGE_DB, Math.min(SHELF_GAIN_RANGE_DB, gainDb));
+    this.lowShelf.gain.cancelScheduledValues(this.ctx.currentTime);
+    this.lowShelf.gain.linearRampToValueAtTime(
+      safe,
+      this.ctx.currentTime + 0.05,
+    );
+  }
+
+  /** Treble shelf gain in dB. Boosts/cuts above ~4 kHz. */
+  setHighShelf(gainDb: number) {
+    if (!this.highShelf || !this.ctx) return;
+    const safe = Math.max(-SHELF_GAIN_RANGE_DB, Math.min(SHELF_GAIN_RANGE_DB, gainDb));
+    this.highShelf.gain.cancelScheduledValues(this.ctx.currentTime);
+    this.highShelf.gain.linearRampToValueAtTime(
+      safe,
+      this.ctx.currentTime + 0.05,
+    );
+  }
+
   play(id: SoundId) {
     const ctx = this.ensureContext();
     this.stop(true);
@@ -132,6 +264,51 @@ export class AudioEngine {
     const output = ctx.createGain();
     output.gain.value = 0;
     output.connect(this.master!);
+
+    // Recorded sounds: load the decoded loop asynchronously, then start it and
+    // fade in. Guarded so a quick toggle to another sound before the buffer
+    // finishes loading won't leave an orphaned source playing.
+    const sampleUrl = SAMPLE_URLS[id];
+    if (sampleUrl) {
+      let stopped = false;
+      let bufSource: AudioBufferSourceNode | null = null;
+
+      this.loadSample(sampleUrl)
+        .then((buffer) => {
+          if (stopped || this.currentId !== id) return;
+          bufSource = ctx.createBufferSource();
+          bufSource.buffer = buffer;
+          bufSource.loop = true;
+          bufSource.connect(output);
+          bufSource.start();
+          const t = ctx.currentTime;
+          output.gain.cancelScheduledValues(t);
+          output.gain.setValueAtTime(0, t);
+          output.gain.linearRampToValueAtTime(1, t + FADE);
+        })
+        .catch(() => {
+          /* network/decoding failure — sound simply won't start */
+        });
+
+      const stopSample = () => {
+        stopped = true;
+        const now = ctx.currentTime;
+        output.gain.cancelScheduledValues(now);
+        output.gain.setValueAtTime(output.gain.value, now);
+        output.gain.linearRampToValueAtTime(0, now + FADE);
+        if (bufSource) {
+          try {
+            bufSource.stop(now + FADE + 0.05);
+          } catch {
+            /* already stopped */
+          }
+        }
+        setTimeout(() => output.disconnect(), (FADE + 0.2) * 1000);
+      };
+
+      this.active = { sources: [], output, stop: stopSample };
+      return;
+    }
 
     const sources: AudioScheduledSourceNode[] = [];
     const disposers: Array<() => void> = [];
