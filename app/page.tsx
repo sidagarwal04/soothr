@@ -36,11 +36,19 @@ export default function HomePage() {
     document.documentElement.dataset.night = night ? "on" : "off";
   }, [night]);
 
-  // Exit night mode on any tap inside the dim veil.
+  // Exit night mode when the user taps the dim background. Taps on
+  // interactive controls (everything is promoted with .above-veil) are
+  // ignored so the player keeps working in dim mode and so the Wake button
+  // isn't double-triggered (its own onClick toggles night off; the global
+  // handler used to fire in the same batch and flip it back on).
   useEffect(() => {
     if (!night) return;
-    const onTap = () => setNight(false);
-    window.addEventListener("pointerdown", onTap, { once: true });
+    const onTap = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (target?.closest(".above-veil")) return;
+      setNight(false);
+    };
+    window.addEventListener("pointerdown", onTap);
     return () => window.removeEventListener("pointerdown", onTap);
   }, [night]);
 
