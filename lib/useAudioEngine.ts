@@ -7,6 +7,7 @@ import type { SoundId } from "./sounds";
 export function useAudioEngine() {
   const engineRef = useRef<AudioEngine | null>(null);
   const [current, setCurrent] = useState<SoundId | null>(null);
+  const [lastPlayed, setLastPlayed] = useState<SoundId | null>(null);
   const [volume, setVolumeState] = useState(0.5);
   const [timerMinutes, setTimerMinutes] = useState<number | null>(null);
   const [timerEndsAt, setTimerEndsAt] = useState<number | null>(null);
@@ -19,10 +20,17 @@ export function useAudioEngine() {
   const play = useCallback((id: SoundId) => {
     engineRef.current?.play(id);
     setCurrent(id);
+    setLastPlayed(id);
   }, []);
 
   const stop = useCallback(() => {
     engineRef.current?.stop();
+    setCurrent(null);
+    setTimerEndsAt(null);
+  }, []);
+
+  const fadeStop = useCallback(() => {
+    engineRef.current?.fadeOutAndStop(2);
     setCurrent(null);
     setTimerEndsAt(null);
   }, []);
@@ -66,13 +74,28 @@ export function useAudioEngine() {
     }
   }, [now, timerEndsAt]);
 
+  // Re-arm the AudioContext when the tab becomes visible again — iOS can
+  // still suspend us under heavy memory pressure even with the keep-alive
+  // element, and Android browsers occasionally pause the context on lock.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        engineRef.current?.resume();
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
   return {
     current,
+    lastPlayed,
     isPlaying: current !== null,
     volume,
     setVolume,
     play,
     stop,
+    fadeStop,
     toggle,
     timerMinutes,
     timerEndsAt,

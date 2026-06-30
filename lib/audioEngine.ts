@@ -4,12 +4,23 @@ import type { SoundId } from "./sounds";
  * Procedural audio engine. Generates every sound on-the-fly via the Web Audio
  * API, so the app has zero audio assets, works offline, and loops seamlessly
  * forever.
+ *
+ * A silent MediaStream is routed through an HTMLAudioElement on first context
+ * creation. That makes iOS treat the page as "actively playing media", which
+ * is the only way to keep an AudioContext alive once a PWA is backgrounded or
+ * the screen locks. The same trick keeps OS-level MediaSession controls live.
  */
 
 interface ActiveSound {
   sources: AudioScheduledSourceNode[];
   output: GainNode;
   stop: () => void;
+}
+
+interface BuildResult {
+  sources: AudioScheduledSourceNode[];
+  /** Called when this sound is stopped — used to tear down setIntervals etc. */
+  disposers?: Array<() => void>;
 }
 
 const FADE = 0.6; // seconds — gentle attack/release so playback feels soft
@@ -19,8 +30,10 @@ export class AudioEngine {
   private master: GainNode | null = null;
   private active: ActiveSound | null = null;
   private currentId: SoundId | null = null;
+  private lastSoundId: SoundId | null = null;
   private volume = 0.5;
   private sleepTimer: ReturnType<typeof setTimeout> | null = null;
+  private keepAliveAudio: HTMLAudioElement | null = null;
 
   /** Lazily create the AudioContext on first user gesture. */
   private ensureContext(): AudioContext {
@@ -33,9 +46,54 @@ export class AudioEngine {
       this.master = this.ctx.createGain();
       this.master.gain.value = this.volume;
       this.master.connect(this.ctx.destination);
+      this.initSilentKeepAlive();
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
     return this.ctx;
+  }
+
+  /**
+   * Plumb a silent looping buffer through a MediaStreamDestination into an
+   * <audio> element. This element being "playing" is what convinces iOS to
+   * keep our AudioContext running in the background. Best-effort: degrades
+   * gracefully on browsers that don't expose MediaStreamAudioDestinationNode.
+   */
+  private initSilentKeepAlive() {
+    if (!this.ctx || this.keepAliveAudio) return;
+    try {
+      const ctx = this.ctx;
+      const buffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+      const dest = ctx.createMediaStreamDestination();
+      src.connect(dest);
+      src.start();
+
+      const el = new Audio();
+      el.srcObject = dest.stream;
+      el.loop = true;
+      el.preload = "auto";
+      (el as HTMLMediaElement & { playsInline?: boolean }).playsInline = true;
+      void el.play().catch(() => {
+        /* user gesture missing on first call - retried on next play() */
+      });
+      this.keepAliveAudio = el;
+    } catch {
+      /* MediaStream destination unsupported - background play will degrade */
+    }
+  }
+
+  /**
+   * Called when the page becomes visible again. iOS sometimes still suspends
+   * the context on lock; this re-arms it. Also re-starts the keep-alive
+   * element if iOS paused it during an interruption (incoming call, etc.).
+   */
+  resume() {
+    if (this.ctx?.state === "suspended") void this.ctx.resume();
+    if (this.keepAliveAudio && this.keepAliveAudio.paused) {
+      void this.keepAliveAudio.play().catch(() => {});
+    }
   }
 
   get isPlaying() {
@@ -44,6 +102,11 @@ export class AudioEngine {
 
   get current() {
     return this.currentId;
+  }
+
+  /** The id most recently played — used by MediaSession's "play" handler. */
+  get lastPlayed() {
+    return this.lastSoundId;
   }
 
   setVolume(v: number) {
@@ -61,35 +124,47 @@ export class AudioEngine {
     const ctx = this.ensureContext();
     this.stop(true);
     this.currentId = id;
+    this.lastSoundId = id;
+    if (this.keepAliveAudio?.paused) {
+      void this.keepAliveAudio.play().catch(() => {});
+    }
+
     const output = ctx.createGain();
     output.gain.value = 0;
     output.connect(this.master!);
 
     const sources: AudioScheduledSourceNode[] = [];
+    const disposers: Array<() => void> = [];
+
+    const add = (r: BuildResult) => {
+      sources.push(...r.sources);
+      if (r.disposers) disposers.push(...r.disposers);
+    };
+
     switch (id) {
       case "white":
-        sources.push(...buildNoise(ctx, output, "white"));
+        add(buildNoise(ctx, output, "white"));
         break;
       case "pink":
-        sources.push(...buildNoise(ctx, output, "pink"));
+        add(buildNoise(ctx, output, "pink"));
         break;
       case "brown":
-        sources.push(...buildNoise(ctx, output, "brown"));
+        add(buildNoise(ctx, output, "brown"));
         break;
       case "fan":
-        sources.push(...buildFan(ctx, output));
+        add(buildFan(ctx, output));
         break;
       case "rain":
-        sources.push(...buildRain(ctx, output));
+        add(buildRain(ctx, output));
         break;
       case "ocean":
-        sources.push(...buildOcean(ctx, output));
+        add(buildOcean(ctx, output));
         break;
       case "heartbeat":
-        sources.push(...buildHeartbeat(ctx, output));
+        add(buildHeartbeat(ctx, output));
         break;
       case "womb":
-        sources.push(...buildWomb(ctx, output));
+        add(buildWomb(ctx, output));
         break;
     }
 
@@ -105,6 +180,13 @@ export class AudioEngine {
           s.stop(now + FADE + 0.05);
         } catch {
           /* already stopped */
+        }
+      });
+      disposers.forEach((d) => {
+        try {
+          d();
+        } catch {
+          /* ignore */
         }
       });
       setTimeout(() => output.disconnect(), (FADE + 0.2) * 1000);
@@ -232,20 +314,20 @@ function buildNoise(
   ctx: AudioContext,
   out: AudioNode,
   type: "white" | "pink" | "brown",
-): AudioScheduledSourceNode[] {
+): BuildResult {
   const src = ctx.createBufferSource();
   src.buffer = makeNoiseBuffer(ctx, type);
   src.loop = true;
   src.connect(out);
   src.start();
-  return [src];
+  return { sources: [src] };
 }
 
 /* -------------------------------------------------------------------------- */
 /*                             Textured soundscapes                           */
 /* -------------------------------------------------------------------------- */
 
-function buildFan(ctx: AudioContext, out: AudioNode): AudioScheduledSourceNode[] {
+function buildFan(ctx: AudioContext, out: AudioNode): BuildResult {
   // Pink noise → low-pass with slow filter wobble + subtle amp modulation.
   const src = ctx.createBufferSource();
   src.buffer = makeNoiseBuffer(ctx, "pink");
@@ -270,10 +352,10 @@ function buildFan(ctx: AudioContext, out: AudioNode): AudioScheduledSourceNode[]
   src.connect(hp).connect(lp).connect(out);
   src.start();
   lfo.start();
-  return [src, lfo];
+  return { sources: [src, lfo] };
 }
 
-function buildRain(ctx: AudioContext, out: AudioNode): AudioScheduledSourceNode[] {
+function buildRain(ctx: AudioContext, out: AudioNode): BuildResult {
   // Brown bed + filtered white for hiss + droplet bursts using HP-filtered noise.
   const bed = ctx.createBufferSource();
   bed.buffer = makeNoiseBuffer(ctx, "brown");
@@ -304,22 +386,34 @@ function buildRain(ctx: AudioContext, out: AudioNode): AudioScheduledSourceNode[
   dropGain.gain.value = 0.0;
   drops.connect(dropBP).connect(dropGain).connect(out);
 
-  // Schedule random droplet bursts for the next 10 minutes.
-  const now = ctx.currentTime;
-  for (let t = now + 0.5; t < now + 600; t += 0.04 + Math.random() * 0.18) {
-    const amp = Math.random() ** 2 * 0.5;
-    dropGain.gain.setValueAtTime(0, t);
-    dropGain.gain.linearRampToValueAtTime(amp, t + 0.005);
-    dropGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
-  }
+  // Schedule droplets in 2-minute chunks, refilled every minute. Pre-scheduling
+  // the whole night up front would be 200k+ AudioParam events; chunking keeps
+  // startup snappy and works just as well in background tabs where setInterval
+  // is throttled to at worst once per minute (we stay one chunk ahead).
+  let nextStart = ctx.currentTime + 0.5;
+  const scheduleChunk = () => {
+    const end = nextStart + 120;
+    for (let t = nextStart; t < end; t += 0.04 + Math.random() * 0.18) {
+      const amp = Math.random() ** 2 * 0.5;
+      dropGain.gain.setValueAtTime(0, t);
+      dropGain.gain.linearRampToValueAtTime(amp, t + 0.005);
+      dropGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+    }
+    nextStart = end;
+  };
+  scheduleChunk();
+  const refill = setInterval(scheduleChunk, 60_000);
 
   bed.start();
   hiss.start();
   drops.start();
-  return [bed, hiss, drops];
+  return {
+    sources: [bed, hiss, drops],
+    disposers: [() => clearInterval(refill)],
+  };
 }
 
-function buildOcean(ctx: AudioContext, out: AudioNode): AudioScheduledSourceNode[] {
+function buildOcean(ctx: AudioContext, out: AudioNode): BuildResult {
   // Pink noise gated by a very slow LFO to simulate breaking waves.
   const src = ctx.createBufferSource();
   src.buffer = makeNoiseBuffer(ctx, "pink");
@@ -356,19 +450,15 @@ function buildOcean(ctx: AudioContext, out: AudioNode): AudioScheduledSourceNode
   filtLfo.start();
   ampLfo.start();
   dc.start();
-  return [src, filtLfo, ampLfo, dc];
+  return { sources: [src, filtLfo, ampLfo, dc] };
 }
 
-function buildHeartbeat(
-  ctx: AudioContext,
-  out: AudioNode,
-): AudioScheduledSourceNode[] {
+function buildHeartbeat(ctx: AudioContext, out: AudioNode): BuildResult {
   // Synthesize lub-dub at ~60 bpm using a low sine with a fast envelope.
-  // We arm a recurring schedule via a long-running ConstantSource that just
-  // keeps the graph alive; the actual hits are scheduled in advance.
+  // Events are queued in 2-minute chunks and refilled every minute via
+  // setInterval so a sleep timer of any length works correctly.
   const bpm = 60;
   const beat = 60 / bpm;
-  const dur = 600; // schedule ten minutes worth of beats up front
 
   const gain = ctx.createGain();
   gain.gain.value = 0;
@@ -392,19 +482,27 @@ function buildHeartbeat(
     gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
   };
 
-  const start = ctx.currentTime + 0.2;
-  for (let i = 0; i < dur / beat; i++) {
-    const t = start + i * beat;
-    thump(t, 0.9); // lub
-    thump(t + 0.32, 0.55); // dub
-  }
+  let nextStart = ctx.currentTime + 0.2;
+  const scheduleChunk = () => {
+    const end = nextStart + 120;
+    for (let t = nextStart; t < end; t += beat) {
+      thump(t, 0.9); // lub
+      thump(t + 0.32, 0.55); // dub
+    }
+    nextStart = end;
+  };
+  scheduleChunk();
+  const refill = setInterval(scheduleChunk, 60_000);
 
   osc.start();
   sub.start();
-  return [osc, sub];
+  return {
+    sources: [osc, sub],
+    disposers: [() => clearInterval(refill)],
+  };
 }
 
-function buildWomb(ctx: AudioContext, out: AudioNode): AudioScheduledSourceNode[] {
+function buildWomb(ctx: AudioContext, out: AudioNode): BuildResult {
   // Brown noise bed (whooshing) + soft low-passed heartbeat layer.
   const whoosh = ctx.createBufferSource();
   whoosh.buffer = makeNoiseBuffer(ctx, "brown");
@@ -440,20 +538,28 @@ function buildWomb(ctx: AudioContext, out: AudioNode): AudioScheduledSourceNode[
   osc.connect(heart);
 
   const beat = 60 / 70; // 70 bpm
-  const start = ctx.currentTime + 0.2;
-  for (let i = 0; i < 600 / beat; i++) {
-    const t = start + i * beat;
-    heart.gain.setValueAtTime(0, t);
-    heart.gain.linearRampToValueAtTime(0.4, t + 0.02);
-    heart.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
-    heart.gain.setValueAtTime(0, t + 0.3);
-    heart.gain.linearRampToValueAtTime(0.25, t + 0.32);
-    heart.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
-  }
+  let nextStart = ctx.currentTime + 0.2;
+  const scheduleChunk = () => {
+    const end = nextStart + 120;
+    for (let t = nextStart; t < end; t += beat) {
+      heart.gain.setValueAtTime(0, t);
+      heart.gain.linearRampToValueAtTime(0.4, t + 0.02);
+      heart.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+      heart.gain.setValueAtTime(0, t + 0.3);
+      heart.gain.linearRampToValueAtTime(0.25, t + 0.32);
+      heart.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    }
+    nextStart = end;
+  };
+  scheduleChunk();
+  const refill = setInterval(scheduleChunk, 60_000);
 
   whoosh.start();
   lfo.start();
   dc.start();
   osc.start();
-  return [whoosh, lfo, dc, osc];
+  return {
+    sources: [whoosh, lfo, dc, osc],
+    disposers: [() => clearInterval(refill)],
+  };
 }

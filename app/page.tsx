@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAudioEngine } from "@/lib/useAudioEngine";
 import { useWakeLock } from "@/lib/useWakeLock";
+import { useMediaSession } from "@/lib/useMediaSession";
 import { SOUNDS } from "@/lib/sounds";
 import { BreathingOrb } from "@/components/BreathingOrb";
 import { SoundCard } from "@/components/SoundCard";
@@ -15,6 +16,21 @@ export default function HomePage() {
   const [night, setNight] = useState(false);
 
   useWakeLock(engine.isPlaying);
+
+  const handleMediaPlay = useCallback(() => {
+    const id = engine.current ?? engine.lastPlayed;
+    if (id) engine.play(id);
+  }, [engine]);
+
+  useMediaSession({
+    currentSound:
+      SOUNDS.find((s) => s.id === (engine.current ?? engine.lastPlayed)) ??
+      null,
+    isPlaying: engine.isPlaying,
+    onPlay: handleMediaPlay,
+    onPause: engine.fadeStop,
+    onStop: engine.stop,
+  });
 
   useEffect(() => {
     document.documentElement.dataset.night = night ? "on" : "off";
