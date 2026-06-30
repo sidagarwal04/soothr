@@ -11,7 +11,6 @@ const HUE_BY_SOUND: Record<SoundId, [string, string]> = {
   white: ["#cfd6ff", "#7f8aff"],
   pink: ["#ffc0d8", "#c170ff"],
   brown: ["#ffd6a8", "#a36a3a"],
-  shush: ["#dbe5ff", "#6d83c4"],
   fan: ["#b6e6ff", "#5b78ff"],
   vacuum: ["#d6d6d6", "#6a6a72"],
   hairdryer: ["#ffd6a8", "#d97700"],

@@ -2,7 +2,6 @@ export type SoundId =
   | "white"
   | "pink"
   | "brown"
-  | "shush"
   | "fan"
   | "vacuum"
   | "hairdryer"
@@ -46,13 +45,6 @@ export const SOUNDS: SoundMeta[] = [
     description: "Classic static hush. Masks household noise well.",
     emoji: "✦",
     accent: "from-slate-300/30 to-slate-500/20",
-  },
-  {
-    id: "shush",
-    label: "Shush",
-    description: "Rhythmic 'shhhhh' bursts — the way a parent settles a fuss.",
-    emoji: "≋",
-    accent: "from-indigo-300/30 to-blue-500/20",
   },
   {
     id: "fan",

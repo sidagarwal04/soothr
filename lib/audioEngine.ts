@@ -328,9 +328,6 @@ export class AudioEngine {
       case "brown":
         add(buildNoise(ctx, output, "brown"));
         break;
-      case "shush":
-        add(buildShush(ctx, output));
-        break;
       case "fan":
         add(buildFan(ctx, output));
         break;
@@ -760,46 +757,6 @@ function buildWomb(ctx: AudioContext, out: AudioNode): BuildResult {
     sources: [whoosh, lfo, dc, osc],
     disposers: [() => clearInterval(refill)],
   };
-}
-
-function buildShush(ctx: AudioContext, out: AudioNode): BuildResult {
-  // Bandpass-filtered white noise modulated into rhythmic "shhh" bursts at
-  // ~1 Hz — the rhythm parents instinctively shush at (Harvey Karp 5 S's).
-  const src = ctx.createBufferSource();
-  src.buffer = makeNoiseBuffer(ctx, "white");
-  src.loop = true;
-
-  const bp = ctx.createBiquadFilter();
-  bp.type = "bandpass";
-  bp.frequency.value = 5200;
-  bp.Q.value = 1.0;
-
-  const hp = ctx.createBiquadFilter();
-  hp.type = "highpass";
-  hp.frequency.value = 2000;
-
-  const env = ctx.createGain();
-  env.gain.value = 0;
-
-  src.connect(hp).connect(bp).connect(env).connect(out);
-
-  let nextStart = ctx.currentTime + 0.2;
-  const scheduleChunk = () => {
-    const end = nextStart + 120;
-    // ~1 burst per second, with slight human-feeling jitter.
-    for (let t = nextStart; t < end; t += 0.95 + Math.random() * 0.15) {
-      env.gain.setValueAtTime(0, t);
-      env.gain.linearRampToValueAtTime(0.7, t + 0.08);
-      env.gain.linearRampToValueAtTime(0.55, t + 0.32);
-      env.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
-    }
-    nextStart = end;
-  };
-  scheduleChunk();
-  const refill = setInterval(scheduleChunk, 60_000);
-
-  src.start();
-  return { sources: [src], disposers: [() => clearInterval(refill)] };
 }
 
 function buildVacuum(ctx: AudioContext, out: AudioNode): BuildResult {
