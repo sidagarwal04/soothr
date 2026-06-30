@@ -11,11 +11,18 @@ const HUE_BY_SOUND: Record<SoundId, [string, string]> = {
   white: ["#cfd6ff", "#7f8aff"],
   pink: ["#ffc0d8", "#c170ff"],
   brown: ["#ffd6a8", "#a36a3a"],
+  shush: ["#dbe5ff", "#6d83c4"],
   fan: ["#b6e6ff", "#5b78ff"],
+  vacuum: ["#d6d6d6", "#6a6a72"],
+  hairdryer: ["#ffd6a8", "#d97700"],
   rain: ["#a8e6ff", "#3865d6"],
+  stream: ["#b6f0e3", "#1f8a8a"],
   ocean: ["#9ff0d8", "#3d72c4"],
+  crickets: ["#c8f7c5", "#2f6e3a"],
   heartbeat: ["#ffb1c2", "#e0506e"],
   womb: ["#e1b6ff", "#7a3fb8"],
+  lullaby: ["#d4b8ff", "#5e3da8"],
+  indianLullaby: ["#ffb0d3", "#a83e7a"],
 };
 
 export function BreathingOrb({ playing, sound }: Props) {

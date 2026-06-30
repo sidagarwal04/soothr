@@ -151,20 +151,41 @@ export class AudioEngine {
       case "brown":
         add(buildNoise(ctx, output, "brown"));
         break;
+      case "shush":
+        add(buildShush(ctx, output));
+        break;
       case "fan":
         add(buildFan(ctx, output));
+        break;
+      case "vacuum":
+        add(buildVacuum(ctx, output));
+        break;
+      case "hairdryer":
+        add(buildHairDryer(ctx, output));
         break;
       case "rain":
         add(buildRain(ctx, output));
         break;
+      case "stream":
+        add(buildStream(ctx, output));
+        break;
       case "ocean":
         add(buildOcean(ctx, output));
+        break;
+      case "crickets":
+        add(buildCrickets(ctx, output));
         break;
       case "heartbeat":
         add(buildHeartbeat(ctx, output));
         break;
       case "womb":
         add(buildWomb(ctx, output));
+        break;
+      case "lullaby":
+        add(buildLullaby(ctx, output));
+        break;
+      case "indianLullaby":
+        add(buildIndianLullaby(ctx, output));
         break;
     }
 
@@ -562,4 +583,350 @@ function buildWomb(ctx: AudioContext, out: AudioNode): BuildResult {
     sources: [whoosh, lfo, dc, osc],
     disposers: [() => clearInterval(refill)],
   };
+}
+
+function buildShush(ctx: AudioContext, out: AudioNode): BuildResult {
+  // Bandpass-filtered white noise modulated into rhythmic "shhh" bursts at
+  // ~1 Hz — the rhythm parents instinctively shush at (Harvey Karp 5 S's).
+  const src = ctx.createBufferSource();
+  src.buffer = makeNoiseBuffer(ctx, "white");
+  src.loop = true;
+
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.value = 5200;
+  bp.Q.value = 1.0;
+
+  const hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 2000;
+
+  const env = ctx.createGain();
+  env.gain.value = 0;
+
+  src.connect(hp).connect(bp).connect(env).connect(out);
+
+  let nextStart = ctx.currentTime + 0.2;
+  const scheduleChunk = () => {
+    const end = nextStart + 120;
+    // ~1 burst per second, with slight human-feeling jitter.
+    for (let t = nextStart; t < end; t += 0.95 + Math.random() * 0.15) {
+      env.gain.setValueAtTime(0, t);
+      env.gain.linearRampToValueAtTime(0.7, t + 0.08);
+      env.gain.linearRampToValueAtTime(0.55, t + 0.32);
+      env.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
+    }
+    nextStart = end;
+  };
+  scheduleChunk();
+  const refill = setInterval(scheduleChunk, 60_000);
+
+  src.start();
+  return { sources: [src], disposers: [() => clearInterval(refill)] };
+}
+
+function buildVacuum(ctx: AudioContext, out: AudioNode): BuildResult {
+  // Three layers: low rumble (chassis), mid turbulence (airflow), and a
+  // sawtooth motor whine with a slow LFO so it "breathes" like a real motor.
+  const rumble = ctx.createBufferSource();
+  rumble.buffer = makeNoiseBuffer(ctx, "brown");
+  rumble.loop = true;
+  const rumbleLP = ctx.createBiquadFilter();
+  rumbleLP.type = "lowpass";
+  rumbleLP.frequency.value = 220;
+  const rumbleGain = ctx.createGain();
+  rumbleGain.gain.value = 0.45;
+  rumble.connect(rumbleLP).connect(rumbleGain).connect(out);
+
+  const turb = ctx.createBufferSource();
+  turb.buffer = makeNoiseBuffer(ctx, "white");
+  turb.loop = true;
+  const turbHP = ctx.createBiquadFilter();
+  turbHP.type = "highpass";
+  turbHP.frequency.value = 200;
+  const turbLP = ctx.createBiquadFilter();
+  turbLP.type = "lowpass";
+  turbLP.frequency.value = 2400;
+  const turbGain = ctx.createGain();
+  turbGain.gain.value = 0.5;
+  turb.connect(turbHP).connect(turbLP).connect(turbGain).connect(out);
+
+  const whine = ctx.createOscillator();
+  whine.type = "sawtooth";
+  whine.frequency.value = 220;
+  const whineLP = ctx.createBiquadFilter();
+  whineLP.type = "lowpass";
+  whineLP.frequency.value = 1400;
+  const whineGain = ctx.createGain();
+  whineGain.gain.value = 0.07;
+  whine.connect(whineLP).connect(whineGain).connect(out);
+
+  // Slow LFO breathes the motor pitch ±4 Hz so it doesn't feel sterile.
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = 0.28;
+  const lfoGain = ctx.createGain();
+  lfoGain.gain.value = 4;
+  lfo.connect(lfoGain).connect(whine.frequency);
+
+  rumble.start();
+  turb.start();
+  whine.start();
+  lfo.start();
+  return { sources: [rumble, turb, whine, lfo] };
+}
+
+function buildHairDryer(ctx: AudioContext, out: AudioNode): BuildResult {
+  // Brighter and lighter than the vacuum: no chassis rumble, motor tone is
+  // higher and filtered through a peakier bandpass for that hair-dryer hiss.
+  const turb = ctx.createBufferSource();
+  turb.buffer = makeNoiseBuffer(ctx, "white");
+  turb.loop = true;
+  const turbHP = ctx.createBiquadFilter();
+  turbHP.type = "highpass";
+  turbHP.frequency.value = 400;
+  const turbLP = ctx.createBiquadFilter();
+  turbLP.type = "lowpass";
+  turbLP.frequency.value = 5500;
+  const turbGain = ctx.createGain();
+  turbGain.gain.value = 0.6;
+  turb.connect(turbHP).connect(turbLP).connect(turbGain).connect(out);
+
+  const whine = ctx.createOscillator();
+  whine.type = "sawtooth";
+  whine.frequency.value = 460;
+  const whineBP = ctx.createBiquadFilter();
+  whineBP.type = "bandpass";
+  whineBP.frequency.value = 900;
+  whineBP.Q.value = 1.4;
+  const whineGain = ctx.createGain();
+  whineGain.gain.value = 0.05;
+  whine.connect(whineBP).connect(whineGain).connect(out);
+
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = 0.42;
+  const lfoGain = ctx.createGain();
+  lfoGain.gain.value = 6;
+  lfo.connect(lfoGain).connect(whine.frequency);
+
+  turb.start();
+  whine.start();
+  lfo.start();
+  return { sources: [turb, whine, lfo] };
+}
+
+function buildStream(ctx: AudioContext, out: AudioNode): BuildResult {
+  // High-passed white-noise bed for water rush + bandpass "bubble" pops at
+  // random intervals so it feels like a real brook, not a hiss.
+  const bed = ctx.createBufferSource();
+  bed.buffer = makeNoiseBuffer(ctx, "white");
+  bed.loop = true;
+  const hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 900;
+  const lp = ctx.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 6500;
+  const bedGain = ctx.createGain();
+  bedGain.gain.value = 0.45;
+  bed.connect(hp).connect(lp).connect(bedGain).connect(out);
+
+  const bubble = ctx.createBufferSource();
+  bubble.buffer = makeNoiseBuffer(ctx, "white");
+  bubble.loop = true;
+  const bubbleBP = ctx.createBiquadFilter();
+  bubbleBP.type = "bandpass";
+  bubbleBP.frequency.value = 2600;
+  bubbleBP.Q.value = 5;
+  const bubbleGain = ctx.createGain();
+  bubbleGain.gain.value = 0;
+  bubble.connect(bubbleBP).connect(bubbleGain).connect(out);
+
+  let nextStart = ctx.currentTime + 0.5;
+  const scheduleChunk = () => {
+    const end = nextStart + 120;
+    let t = nextStart;
+    while (t < end) {
+      const amp = Math.random() ** 2 * 0.35;
+      bubbleGain.gain.setValueAtTime(0, t);
+      bubbleGain.gain.linearRampToValueAtTime(amp, t + 0.01);
+      bubbleGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+      t += 0.15 + Math.random() * 0.4;
+    }
+    nextStart = end;
+  };
+  scheduleChunk();
+  const refill = setInterval(scheduleChunk, 60_000);
+
+  bed.start();
+  bubble.start();
+  return {
+    sources: [bed, bubble],
+    disposers: [() => clearInterval(refill)],
+  };
+}
+
+function buildCrickets(ctx: AudioContext, out: AudioNode): BuildResult {
+  // Four "cricket voices", each a separate bandpass-noise source with its
+  // own pitch and chirp cadence. Plus a faint brown-noise nightscape under
+  // it so silence between chirps doesn't feel sterile.
+  const masterGain = ctx.createGain();
+  masterGain.gain.value = 0.55;
+  masterGain.connect(out);
+
+  const ambient = ctx.createBufferSource();
+  ambient.buffer = makeNoiseBuffer(ctx, "brown");
+  ambient.loop = true;
+  const ambientLP = ctx.createBiquadFilter();
+  ambientLP.type = "lowpass";
+  ambientLP.frequency.value = 600;
+  const ambientGain = ctx.createGain();
+  ambientGain.gain.value = 0.12;
+  ambient.connect(ambientLP).connect(ambientGain).connect(masterGain);
+  ambient.start();
+
+  const sources: AudioScheduledSourceNode[] = [ambient];
+  const disposers: Array<() => void> = [];
+
+  for (let i = 0; i < 4; i++) {
+    const cricket = ctx.createBufferSource();
+    cricket.buffer = makeNoiseBuffer(ctx, "white");
+    cricket.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 4300 + Math.random() * 1300;
+    bp.Q.value = 22;
+    const env = ctx.createGain();
+    env.gain.value = 0;
+    cricket.connect(bp).connect(env).connect(masterGain);
+    cricket.start();
+    sources.push(cricket);
+
+    const baseInterval = 0.32 + Math.random() * 0.35;
+    let nextChirp = ctx.currentTime + Math.random() * 2;
+    const scheduleChunk = () => {
+      const end = nextChirp + 120;
+      while (nextChirp < end) {
+        const t = nextChirp;
+        const amp = 0.4 + Math.random() * 0.45;
+        env.gain.setValueAtTime(0, t);
+        env.gain.linearRampToValueAtTime(amp, t + 0.005);
+        env.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+        nextChirp += baseInterval * (0.85 + Math.random() * 0.3);
+      }
+    };
+    scheduleChunk();
+    const refill = setInterval(scheduleChunk, 60_000);
+    disposers.push(() => clearInterval(refill));
+  }
+
+  return { sources, disposers };
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  Lullabies                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Music-box-style synthesis: a sine fundamental for warmth + a sine an
+ * octave above for brightness, each note shaped with a quick attack and
+ * long exponential decay so notes ring and bleed into each other gently.
+ */
+function scheduleMelody(
+  ctx: AudioContext,
+  out: AudioNode,
+  melody: Array<[number, number]>, // [freqHz, beats]
+  beatDur: number,
+): BuildResult {
+  const noteGain = ctx.createGain();
+  noteGain.gain.value = 0;
+  noteGain.connect(out);
+
+  const fund = ctx.createOscillator();
+  fund.type = "sine";
+  const fundGain = ctx.createGain();
+  fundGain.gain.value = 0.7;
+  fund.connect(fundGain).connect(noteGain);
+
+  const high = ctx.createOscillator();
+  high.type = "sine";
+  const highGain = ctx.createGain();
+  highGain.gain.value = 0.25;
+  high.connect(highGain).connect(noteGain);
+
+  const totalLoopDur = melody.reduce((s, [, b]) => s + b * beatDur, 0);
+
+  const scheduleLoop = (loopStart: number) => {
+    let t = loopStart;
+    for (const [freq, beats] of melody) {
+      const dur = beats * beatDur;
+      fund.frequency.setValueAtTime(freq, t);
+      high.frequency.setValueAtTime(freq * 2, t);
+      noteGain.gain.setValueAtTime(0, t);
+      noteGain.gain.linearRampToValueAtTime(0.35, t + 0.025);
+      noteGain.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.92);
+      t += dur;
+    }
+  };
+
+  let nextLoop = ctx.currentTime + 0.3;
+  // Pre-fill enough loops to cover a 2-minute look-ahead.
+  while (nextLoop < ctx.currentTime + 120) {
+    scheduleLoop(nextLoop);
+    nextLoop += totalLoopDur;
+  }
+  const refill = setInterval(() => {
+    while (nextLoop < ctx.currentTime + 120) {
+      scheduleLoop(nextLoop);
+      nextLoop += totalLoopDur;
+    }
+  }, 60_000);
+
+  fund.start();
+  high.start();
+  return {
+    sources: [fund, high],
+    disposers: [() => clearInterval(refill)],
+  };
+}
+
+function buildLullaby(ctx: AudioContext, out: AudioNode): BuildResult {
+  // Twinkle, Twinkle, Little Star in C major.
+  const C = 261.63,
+    D = 293.66,
+    E = 329.63,
+    F = 349.23,
+    G = 392.0,
+    A = 440.0;
+  const melody: Array<[number, number]> = [
+    [C, 1], [C, 1], [G, 1], [G, 1], [A, 1], [A, 1], [G, 2],
+    [F, 1], [F, 1], [E, 1], [E, 1], [D, 1], [D, 1], [C, 2],
+    [G, 1], [G, 1], [F, 1], [F, 1], [E, 1], [E, 1], [D, 2],
+    [G, 1], [G, 1], [F, 1], [F, 1], [E, 1], [E, 1], [D, 2],
+    [C, 1], [C, 1], [G, 1], [G, 1], [A, 1], [A, 1], [G, 2],
+    [F, 1], [F, 1], [E, 1], [E, 1], [D, 1], [D, 1], [C, 2],
+  ];
+  return scheduleMelody(ctx, out, melody, 0.55);
+}
+
+function buildIndianLullaby(ctx: AudioContext, out: AudioNode): BuildResult {
+  // A simple pentatonic melody in Raga Bhupali — Sa Re Ga Pa Dha (C D E G A),
+  // a peaceful evening raga associated with devotion and sleep. No semitones,
+  // so it never feels harsh; the phrases sway between Pa (G) and Sa (C).
+  const C = 261.63,
+    D = 293.66,
+    E = 329.63,
+    G = 392.0,
+    A = 440.0,
+    C2 = 523.25;
+  const melody: Array<[number, number]> = [
+    [G, 1], [A, 1], [G, 1], [E, 1],
+    [D, 1], [E, 1], [D, 1], [C, 2],
+    [E, 1], [G, 1], [A, 1], [G, 1],
+    [E, 1], [D, 1], [E, 1], [C, 2],
+    [G, 1], [A, 1], [C2, 1], [A, 1],
+    [G, 1], [E, 1], [D, 1], [C, 2],
+    [E, 1], [D, 1], [E, 1], [G, 1],
+    [E, 1], [D, 1], [C, 1], [C, 2],
+  ];
+  return scheduleMelody(ctx, out, melody, 0.7);
 }

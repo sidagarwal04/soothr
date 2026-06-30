@@ -2,11 +2,18 @@ export type SoundId =
   | "white"
   | "pink"
   | "brown"
+  | "shush"
   | "fan"
+  | "vacuum"
+  | "hairdryer"
   | "rain"
+  | "stream"
   | "ocean"
+  | "crickets"
   | "heartbeat"
-  | "womb";
+  | "womb"
+  | "lullaby"
+  | "indianLullaby";
 
 export interface SoundMeta {
   id: SoundId;
@@ -39,11 +46,32 @@ export const SOUNDS: SoundMeta[] = [
     accent: "from-slate-300/30 to-slate-500/20",
   },
   {
+    id: "shush",
+    label: "Shush",
+    description: "Rhythmic 'shhhhh' bursts — the way a parent settles a fuss.",
+    emoji: "≋",
+    accent: "from-indigo-300/30 to-blue-500/20",
+  },
+  {
     id: "fan",
     label: "Fan",
     description: "Steady whir, like a bedroom fan on low.",
     emoji: "✺",
     accent: "from-sky-400/30 to-indigo-500/20",
+  },
+  {
+    id: "vacuum",
+    label: "Vacuum",
+    description: "Steady motor hum. Many babies drift off within seconds.",
+    emoji: "⊙",
+    accent: "from-zinc-400/30 to-stone-600/20",
+  },
+  {
+    id: "hairdryer",
+    label: "Hair Dryer",
+    description: "Warmer, higher-pitched motor — gentler than a vacuum.",
+    emoji: "✧",
+    accent: "from-orange-300/30 to-amber-600/20",
   },
   {
     id: "rain",
@@ -53,11 +81,25 @@ export const SOUNDS: SoundMeta[] = [
     accent: "from-cyan-400/30 to-blue-600/20",
   },
   {
+    id: "stream",
+    label: "Stream",
+    description: "A small brook tumbling over stones.",
+    emoji: "≈",
+    accent: "from-cyan-300/30 to-teal-600/20",
+  },
+  {
     id: "ocean",
     label: "Ocean Waves",
     description: "Slow swells, like the shore at dusk.",
     emoji: "～",
     accent: "from-teal-400/30 to-blue-700/20",
+  },
+  {
+    id: "crickets",
+    label: "Crickets",
+    description: "A warm evening porch, soft insect song.",
+    emoji: "✣",
+    accent: "from-emerald-400/30 to-green-700/20",
   },
   {
     id: "heartbeat",
@@ -72,6 +114,20 @@ export const SOUNDS: SoundMeta[] = [
     description: "Whooshing blood flow with a soft heartbeat.",
     emoji: "◐",
     accent: "from-purple-400/30 to-fuchsia-700/20",
+  },
+  {
+    id: "lullaby",
+    label: "Lullaby",
+    description: "Twinkle, Twinkle, Little Star on a soft music box.",
+    emoji: "♫",
+    accent: "from-violet-400/30 to-purple-700/20",
+  },
+  {
+    id: "indianLullaby",
+    label: "Indian Lullaby",
+    description: "A peaceful melody in Raga Bhupali, gentle and swaying.",
+    emoji: "♪",
+    accent: "from-rose-400/30 to-fuchsia-700/20",
   },
 ];
 
