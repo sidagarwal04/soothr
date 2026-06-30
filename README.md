@@ -31,6 +31,21 @@ into seamless ~40s loops. That means:
 - **Background playback**: lock-screen / Bluetooth controls via the MediaSession API
 - **PWA installable**: add to home screen on iOS or Android
 
+## Safety
+
+White noise for infants should be used thoughtfully. Soothr is built with this
+in mind:
+
+- **Quieter default volume.** Playback starts at ~30% (roughly −10 dB) rather
+  than full blast, and the slider shows a live dB readout.
+- **One-time safety hint.** On first play, a dismissible note reminds you to
+  place the device **at least 2 m from the crib** and keep the level at the
+  baby's ear at or below **~50 dB**, in line with common pediatric guidance.
+- **Sleep timer** so audio doesn't run all night unless you choose ∞.
+
+This is general information, not medical advice — follow your pediatrician's
+guidance.
+
 ## Run it
 
 ```bash
@@ -48,9 +63,68 @@ npm start
 
 The service worker only registers in production builds.
 
+## Deployment
+
+Deployed on [Netlify](https://soothr.netlify.app/). Netlify auto-detects the
+Next.js App Router — no `netlify.toml` is required. Pushes to `main` trigger a
+new build and deploy.
+
+## Project structure
+
+```
+app/
+  layout.tsx                 # Root layout, metadata, fonts
+  page.tsx                   # Main screen: sound grid, orb, player, timer
+  manifest.ts                # PWA manifest
+  icon.svg                   # App icon
+  service-worker-register.tsx
+  globals.css
+components/
+  BreathingOrb.tsx           # Decorative animated orb (color per sound)
+  SoundCard.tsx              # Sound grid tile
+  PlayerBar.tsx              # Stop / volume / tune controls
+  SoundTuner.tsx             # 3-band EQ panel (Hz + dB)
+  SleepTimer.tsx             # Timer presets
+  SafetyHint.tsx             # One-time infant-ear safety note
+  NightModeToggle.tsx        # Dim/wake control
+lib/
+  audioEngine.ts             # Web Audio engine: synthesis + sample playback + EQ
+  sounds.ts                  # SoundId union + sound metadata + timer presets
+  useAudioEngine.ts          # React hook wrapping the engine
+  useMediaSession.ts         # OS-level playback controls
+  useWakeLock.ts             # Keep screen awake while playing
+public/
+  sounds/                    # CC0 audio loops + CREDITS.md
+  sw.js                      # Service worker
+```
+
+## Adding a sound
+
+1. Add the id to the `SoundId` union and a metadata entry to `SOUNDS` in
+   [`lib/sounds.ts`](./lib/sounds.ts).
+2. Pick how it's produced:
+   - **Synthesized:** write a `build<Name>()` function in
+     [`lib/audioEngine.ts`](./lib/audioEngine.ts) and add a `case` in the
+     `play()` switch.
+   - **Recorded:** drop a seamless loop in `public/sounds/`, add it to
+     `SAMPLE_URLS` in the engine, and credit the source in
+     [`public/sounds/CREDITS.md`](./public/sounds/CREDITS.md). Use only
+     CC0 / public-domain audio.
+3. Add an orb color in `HUE_BY_SOUND` in
+   [`components/BreathingOrb.tsx`](./components/BreathingOrb.tsx).
+4. Keep the total sound count divisible by the grid columns (2 and 4) so the
+   grid stays even.
+
+## Browser support
+
+Targets modern evergreen browsers. The Web Audio API and MediaSession are
+broadly supported; Wake Lock and background playback behavior vary by platform
+(iOS requires installing to the Home Screen for reliable background audio).
+
 ## Tech
 
-- Next.js 15 (App Router) + React 19
+- Next.js 15.5 (App Router) + React 19
+- TypeScript
 - Tailwind CSS
 - Web Audio API (procedural synthesis + sample playback of CC0 loops)
 - MediaSession API for OS-level playback controls
