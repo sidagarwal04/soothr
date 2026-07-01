@@ -58,8 +58,14 @@ export default function HomePage() {
   const currentSound = SOUNDS.find((s) => s.id === engine.current) ?? null;
 
   return (
-    <main className="relative min-h-[100dvh] pb-32">
-      <header className="above-veil mx-auto flex max-w-4xl items-center justify-between px-5 pt-5 sm:pt-7">
+    <main
+      className={`relative flex h-[100dvh] flex-col overflow-hidden ${
+        engine.isPlaying
+          ? "pb-[calc(env(safe-area-inset-bottom,0px)+5rem)]"
+          : ""
+      }`}
+    >
+      <header className="above-veil mx-auto flex w-full max-w-4xl shrink-0 items-center justify-between px-5 pt-5 sm:pt-7">
         <div className="flex items-center gap-3">
           <div className="relative h-10 w-10">
             <div className="absolute inset-0 rounded-full bg-gradient-to-br from-glow-lavender to-dusk-500 blur-md opacity-70" />
@@ -77,7 +83,7 @@ export default function HomePage() {
         <NightModeToggle night={night} onToggle={() => setNight((n) => !n)} />
       </header>
 
-      <section className="above-veil mx-auto mt-3 flex max-w-4xl flex-col items-center px-5 sm:mt-6">
+      <section className="above-veil mx-auto mt-3 flex w-full max-w-4xl shrink-0 flex-col items-center px-5 sm:mt-5">
         <BreathingOrb playing={engine.isPlaying} sound={engine.current} />
         <p className="mt-4 text-center text-balance text-sm text-white/55 sm:text-base">
           {engine.isPlaying && currentSound ? (
@@ -93,18 +99,20 @@ export default function HomePage() {
         <SafetyHint active={engine.isPlaying} />
       </section>
 
-      <section className="above-veil mx-auto mt-5 grid max-w-4xl grid-cols-4 gap-2.5 px-5 sm:mt-6 sm:gap-3 md:grid-cols-8">
-        {SOUNDS.map((s) => (
-          <SoundCard
-            key={s.id}
-            sound={s}
-            active={engine.current === s.id}
-            onClick={() => engine.toggle(s.id)}
-          />
-        ))}
+      <section className="above-veil mx-auto my-3 flex w-full min-h-0 max-w-4xl flex-1 px-5 sm:my-4">
+        <div className="grid h-full w-full grid-cols-4 grid-rows-4 gap-2.5 sm:gap-3 md:grid-cols-8 md:grid-rows-2">
+          {SOUNDS.map((s) => (
+            <SoundCard
+              key={s.id}
+              sound={s}
+              active={engine.current === s.id}
+              onClick={() => engine.toggle(s.id)}
+            />
+          ))}
+        </div>
       </section>
 
-      <section className="above-veil mx-auto mt-5 max-w-4xl px-5 sm:mt-6">
+      <section className="above-veil mx-auto w-full max-w-4xl shrink-0 px-5">
         <SleepTimer
           currentMinutes={engine.timerMinutes}
           endsAt={engine.timerEndsAt}

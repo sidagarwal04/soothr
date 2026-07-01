@@ -14,7 +14,7 @@ export function SoundCard({ sound, active, onClick }: Props) {
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`group relative flex aspect-square flex-col items-center justify-center gap-1 overflow-hidden rounded-2xl p-1.5 text-center transition-all duration-300 sm:gap-1.5 sm:p-2.5 ${
+      className={`group relative flex h-full min-h-0 w-full flex-col items-center justify-center gap-1 overflow-hidden rounded-2xl p-1.5 text-center transition-all duration-300 sm:gap-1.5 sm:p-2.5 ${
         active
           ? "glass-strong scale-[1.02] ring-1 ring-white/30"
           : "glass hover:scale-[1.015] hover:bg-white/[0.06] active:scale-[0.98]"
