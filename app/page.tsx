@@ -84,8 +84,10 @@ export default function HomePage() {
       </header>
 
       <section className="above-veil mx-auto mt-3 flex w-full max-w-4xl shrink-0 flex-col items-center px-5 sm:mt-5">
-        <BreathingOrb playing={engine.isPlaying} sound={engine.current} />
-        <p className="mt-4 text-center text-balance text-sm text-white/55 sm:text-base">
+        <div className="[@media(max-height:640px)]:hidden">
+          <BreathingOrb playing={engine.isPlaying} sound={engine.current} />
+        </div>
+        <p className="text-center text-balance text-sm text-white/55 sm:text-base [@media(max-height:640px)]:mt-0 [@media(min-height:641px)]:mt-4">
           {engine.isPlaying && currentSound ? (
             <>
               <span className="text-white/85">{currentSound.label}</span>
