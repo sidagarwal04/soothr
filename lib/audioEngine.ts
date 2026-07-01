@@ -77,17 +77,25 @@ const RENDERED_LOOP_IDS = new Set<SoundId>([
 ]);
 
 /**
- * Whether to route audio through a MediaStream <audio> element instead of
- * straight to the speakers.
+ * Whether to use the Android "call sentinel" strategy for detecting phone
+ * calls.
  *
  * On Android a pure-WebAudio graph doesn't participate in system audio focus,
- * so an incoming/answered call never pauses it. Playing the audio through an
- * <audio> element makes Android treat it as media, so it's paused on a call
- * and auto-resumed afterward. iOS's existing direct-output + silent-keep-alive
- * path already handles interruptions, and routing real audio through a
- * MediaStream element there is unreliable, so we keep iOS on the direct path.
- * A localStorage override (`soothr.output` = "element" | "direct") allows
- * forcing either path for testing.
+ * so a call never interrupts it — and, as we found, neither does a
+ * MediaStream-fed <audio> element (Android treats those as live/communication
+ * audio). The one thing Android *does* pause on a call is a normal media
+ * element playing a real file (the same reason Spotify pauses during calls).
+ *
+ * So on Android we keep the real audio on the WebAudio→speaker path and add a
+ * silent, real-file <audio> element purely as a focus "sentinel": when Android
+ * pauses it (a call grabbed focus) we actively suspend our AudioContext, and
+ * when it resumes we resume the context — seamlessly, since suspend/resume
+ * keeps the looping source nodes intact.
+ *
+ * iOS's existing direct-output + MediaStream keep-alive path already handles
+ * interruptions via the AudioContext's own "interrupted" state, so it's left
+ * untouched. A localStorage override (`soothr.output` = "element" | "direct")
+ * forces the sentinel path on / off for testing.
  */
 function shouldUseElementOutput(): boolean {
   try {
@@ -107,6 +115,43 @@ function shouldUseElementOutput(): boolean {
   return isAndroid && !isIOS;
 }
 
+/**
+ * Build (once) a data-less silent WAV as an object URL. Played unmuted by the
+ * sentinel <audio> element so Chrome requests real media audio focus (and thus
+ * loses it — and pauses — on a call), while staying completely inaudible.
+ * Generated in-memory so it works fully offline.
+ */
+let silentWavUrl: string | null = null;
+function getSilentWavUrl(): string {
+  if (silentWavUrl) return silentWavUrl;
+  const sampleRate = 8000;
+  const seconds = 3;
+  const numSamples = sampleRate * seconds;
+  const dataSize = numSamples * 2; // 16-bit mono
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  const writeStr = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++)
+      view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true); // fmt chunk size
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+  // Sample data stays all-zero (silence).
+  silentWavUrl = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+  return silentWavUrl;
+}
+
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -120,13 +165,13 @@ export class AudioEngine {
   private lastSoundId: SoundId | null = null;
   private volume = DEFAULT_VOLUME;
   private sleepTimer: ReturnType<typeof setTimeout> | null = null;
+  /** iOS: MediaStream keep-alive element. Android: silent real-file call
+   *  sentinel. Either way it's the element whose pause/play tells us the OS
+   *  took/returned audio focus. */
   private keepAliveAudio: HTMLAudioElement | null = null;
-  /** On Android, audio is routed through keepAliveAudio (a MediaStream element)
-   *  so the OS focus-manages it and pauses it on calls. */
+  /** On Android, use the real-file sentinel to detect calls and actively
+   *  suspend/resume the AudioContext (see shouldUseElementOutput). */
   private useElementOutput = shouldUseElementOutput();
-  /** True if element playback failed and we fell back to direct speaker output
-   *  (so we don't double up audio by also replaying the element). */
-  private fellBackToDestination = false;
   private sampleCache = new Map<string, AudioBuffer>();
   private renderedCache = new Map<SoundId, AudioBuffer>();
   /** Set when the OS takes audio focus (an incoming/ongoing/outgoing call).
@@ -147,11 +192,7 @@ export class AudioEngine {
   getDebugInfo() {
     return {
       ctxState: (this.ctx?.state as string) ?? "none",
-      output: this.useElementOutput
-        ? this.fellBackToDestination
-          ? "element→fallback"
-          : "element"
-        : "direct",
+      output: this.useElementOutput ? "sentinel" : "direct",
       keepAlivePaused: this.keepAliveAudio ? this.keepAliveAudio.paused : null,
       interrupted: this.wasInterrupted,
       pending: this.interruptionTimer !== null,
@@ -250,14 +291,14 @@ export class AudioEngine {
         .connect(this.highShelf)
         .connect(this.lowPass)
         .connect(this.dcBlock)
-        .connect(this.limiter);
+        .connect(this.limiter)
+        .connect(this.ctx.destination);
 
       if (this.useElementOutput) {
-        this.log("output mode: element (Android)");
-        this.setupElementOutput(this.limiter);
+        this.log("call-detect: android sentinel");
+        this.initCallSentinel();
       } else {
-        this.log("output mode: direct");
-        this.limiter.connect(this.ctx.destination);
+        this.log("call-detect: ios keep-alive");
         this.initSilentKeepAlive();
       }
 
@@ -267,7 +308,11 @@ export class AudioEngine {
       // can restore playback automatically.
       this.ctx.addEventListener("statechange", () => this.onStateChange());
     }
-    if (this.ctx.state === "suspended") void this.ctx.resume();
+    // Re-arm on demand, but never while a call interruption is active (that
+    // would talk over the call); resumption is driven by the sentinel instead.
+    if (this.ctx.state === "suspended" && !this.wasInterrupted) {
+      void this.ctx.resume();
+    }
     return this.ctx;
   }
 
@@ -305,69 +350,54 @@ export class AudioEngine {
   }
 
   /**
-   * Android output path: route the real audio through a MediaStream <audio>
-   * element so the OS focus-manages it (pausing on calls). This element doubles
-   * as the keep-alive. If it can't start, fall back to direct speaker output so
-   * sound is never lost (at the cost of call auto-pause).
+   * Android call-detection path. A normal media element playing a real file is
+   * the one thing Android reliably pauses on a phone call (audio focus loss).
+   * We play a silent WAV, unmuted, purely as a "sentinel": its pause/play tells
+   * us when a call took/returned focus, and we suspend/resume the AudioContext
+   * accordingly. The real audio stays on the WebAudio→speaker path.
    */
-  private setupElementOutput(source: AudioNode) {
-    if (!this.ctx || this.keepAliveAudio) return;
+  private initCallSentinel() {
+    if (this.keepAliveAudio) return;
     try {
-      const dest = this.ctx.createMediaStreamDestination();
-      source.connect(dest);
-
       const el = new Audio();
-      el.srcObject = dest.stream;
+      el.src = getSilentWavUrl();
+      el.loop = true;
       el.preload = "auto";
+      el.volume = 1; // content is silent, but unmuted so Chrome takes focus
       (el as HTMLMediaElement & { playsInline?: boolean }).playsInline = true;
       el.play()
-        .then(() => this.log("element-output: playing"))
-        .catch(() => {
-          this.log("element-output: play failed → direct fallback");
-          this.fellBackToDestination = true;
-          try {
-            source.connect(this.ctx!.destination);
-          } catch {
-            /* ignore */
-          }
-        });
+        .then(() => this.log("sentinel: playing"))
+        .catch(() => this.log("sentinel: play blocked (retries on gesture)"));
       this.attachOutputListeners(el);
       this.keepAliveAudio = el;
     } catch {
-      // MediaStream destination unsupported — go direct so audio still works.
-      this.fellBackToDestination = true;
-      try {
-        source.connect(this.ctx.destination);
-      } catch {
-        /* ignore */
-      }
+      /* Audio element unsupported - call auto-pause will degrade */
     }
   }
 
   /**
-   * The OS pauses the output/keep-alive element when something grabs audio
+   * The OS pauses the sentinel/keep-alive element when something grabs audio
    * focus — a notification duck just as often as a call. So we don't react
-   * instantly: start the debounce and (in silent keep-alive mode) try to
-   * resume right away. Only a focus loss that outlasts the debounce window is
-   * treated as a call. When the element plays again, the interruption clears.
+   * instantly: start the debounce. Only a focus loss that outlasts the window
+   * is treated as a call. When the element plays again, playback resumes.
    */
   private attachOutputListeners(el: HTMLAudioElement) {
     el.addEventListener("pause", () => {
-      this.log(`output pause (ctx ${this.ctx?.state ?? "?"})`);
+      this.log(`sentinel pause (ctx ${this.ctx?.state ?? "?"})`);
       if (!this.currentId) return;
       this.beginMaybeInterruption();
-      // The silent keep-alive carries no audio, so replaying it can't fight a
-      // call; do so to recover instantly from transient ducks. In element mode
-      // we let the OS manage focus (replaying would fight a real call).
+      // The iOS keep-alive carries no audio, so replaying it can't fight a call
+      // and recovers instantly from transient ducks. The Android sentinel must
+      // stay paused during a call, so we let the OS manage its focus.
       if (!this.useElementOutput) void el.play().catch(() => {});
     });
     el.addEventListener("play", () => {
-      this.log(`output play (ctx ${this.ctx?.state ?? "?"})`);
+      this.log(`sentinel play (ctx ${this.ctx?.state ?? "?"})`);
       this.clearMaybeInterruption();
-      // In element mode the audio stream is continuous, so playback resumes
-      // seamlessly — just clear the "paused for a call" state.
+      // Android: focus is back, so lift the suspend we applied for the call.
       if (this.useElementOutput && this.wasInterrupted) {
         this.setInterrupted(false);
+        void this.ctx?.resume().catch(() => {});
       }
     });
   }
@@ -418,6 +448,12 @@ export class AudioEngine {
       if (this.currentId && stillGone) {
         this.log(`confirmed call (ctx ${state})`);
         this.setInterrupted(true);
+        // Android keeps the context "running" through a call, so we have to
+        // silence it ourselves. Suspend pauses the audio clock while leaving
+        // the looping sources intact, so resume() picks up seamlessly.
+        if (this.useElementOutput && state === "running") {
+          void this.ctx?.suspend().catch(() => {});
+        }
       } else {
         this.log(`transient, ignored (ctx ${state})`);
       }
@@ -487,21 +523,27 @@ export class AudioEngine {
     if (!ctx) return;
     const state: string = ctx.state;
     this.log(`resume() called (ctx ${state}, vis ${typeof document !== "undefined" ? document.visibilityState : "?"})`);
+    // Always try to revive the sentinel/keep-alive element. If the call is
+    // over this succeeds and (Android) its "play" handler resumes the context;
+    // if a call still holds focus, the OS just re-pauses it.
+    if (this.keepAliveAudio && this.keepAliveAudio.paused) {
+      void this.keepAliveAudio.play().catch(() => {});
+    }
+
+    if (this.useElementOutput) {
+      // Android: don't force-resume the context while a call still holds the
+      // sentinel paused — that would talk over the call. The sentinel's "play"
+      // event resumes us once focus genuinely returns. Only resume here if no
+      // call is in progress (e.g. the context was suspended by backgrounding).
+      if (this.wasInterrupted && this.keepAliveAudio?.paused) return;
+      if (ctx.state === "suspended") void ctx.resume().catch(() => {});
+      return;
+    }
+
     if (state === "suspended" || state === "interrupted") {
       void ctx.resume().catch(() => {});
     }
-    if (
-      this.keepAliveAudio &&
-      this.keepAliveAudio.paused &&
-      !this.fellBackToDestination
-    ) {
-      void this.keepAliveAudio.play().catch(() => {});
-    }
-    // In element mode the audio stream is continuous and the context never
-    // stopped — replaying the element above restores sound, and its "play"
-    // listener clears the interrupted flag. No rebuild needed.
-    if (this.useElementOutput) return;
-    // Direct mode: if the context is already running again but a call had
+    // Direct/iOS mode: if the context is already running again but a call had
     // killed our sources, rebuild now. (When resume() only kicks off
     // ctx.resume(), onStateChange handles the rebuild once "running" fires.)
     if (this.wasInterrupted && this.currentId && ctx.state === "running") {

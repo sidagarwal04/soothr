@@ -20,7 +20,7 @@
 //    user to refresh immediately.
 
 const APP_MAJOR = 1;
-const BUILD = "2026-07-01-3";
+const BUILD = "2026-07-01-4";
 const CACHE = `soothr-cache-${BUILD}`;
 // Persistent store (survives version rotation) for update bookkeeping.
 const META = "soothr-meta";
