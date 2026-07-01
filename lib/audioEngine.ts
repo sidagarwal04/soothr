@@ -25,6 +25,12 @@ interface BuildResult {
 
 const FADE = 0.6; // seconds — gentle attack/release so playback feels soft
 
+/** How long audio focus must stay lost before we treat it as a real call
+ *  (and pause + auto-resume). Short ducks — notifications, a keyboard click,
+ *  a maps voice prompt — recover well within this window and are ignored, so
+ *  background playback is never interrupted by them. */
+const INTERRUPTION_CONFIRM_MS = 1500;
+
 /** Defaults chosen to be safe for infant ears at typical phone-speaker SPL.
  * The volume default (0.3) is roughly -10 dB of digital gain — about half
  * as loud as max perceptually. The EQ defaults are "flat" so the unfiltered
@@ -89,6 +95,8 @@ export class AudioEngine {
   /** Set when the OS takes audio focus (an incoming/ongoing/outgoing call).
    *  We use it to rebuild + resume the sound once the interruption ends. */
   private wasInterrupted = false;
+  /** Debounce timer: only a sustained focus loss is treated as a call. */
+  private interruptionTimer: ReturnType<typeof setTimeout> | null = null;
   /** Notified whenever the interruption state flips, so the UI can show a
    *  "paused for a call" state and dim the orb. */
   private onInterruption?: (interrupted: boolean) => void;
@@ -219,10 +227,17 @@ export class AudioEngine {
       void el.play().catch(() => {
         /* user gesture missing on first call - retried on next play() */
       });
-      // The OS pauses this element the moment a call grabs audio focus. If a
-      // sound was playing, flag it as an interruption so we resume afterward.
+      // The OS pauses this element when something grabs audio focus. That's a
+      // notification duck just as often as a call, so don't react immediately:
+      // start the debounce and try to resume right away. Only a focus loss
+      // that outlasts the debounce window is treated as a call.
       el.addEventListener("pause", () => {
-        if (this.currentId) this.setInterrupted(true);
+        if (!this.currentId) return;
+        this.beginMaybeInterruption();
+        void el.play().catch(() => {});
+      });
+      el.addEventListener("play", () => {
+        if (this.ctx?.state === "running") this.clearMaybeInterruption();
       });
       this.keepAliveAudio = el;
     } catch {
@@ -239,14 +254,42 @@ export class AudioEngine {
     const ctx = this.ctx;
     if (!ctx) return;
     const state: string = ctx.state;
-    if (state === "interrupted") {
-      if (this.currentId) this.setInterrupted(true);
-    } else if (state === "running") {
+    if (state === "running") {
+      // Focus is back. Cancel any pending interruption (it was a transient
+      // duck like a notification) and, if a real call had been confirmed,
+      // rebuild the sound it left playing.
+      this.clearMaybeInterruption();
       if (this.wasInterrupted && this.currentId) {
         const id = this.currentId;
         this.setInterrupted(false);
         this.play(id);
       }
+    } else if (
+      (state === "interrupted" || state === "suspended") &&
+      this.currentId
+    ) {
+      this.beginMaybeInterruption();
+    }
+  }
+
+  /** Start (or keep) the grace timer that decides whether a focus loss is a
+   *  real call. Fires setInterrupted(true) only if focus is still gone after
+   *  INTERRUPTION_CONFIRM_MS — transient ducks recover and cancel it first. */
+  private beginMaybeInterruption() {
+    if (this.wasInterrupted || this.interruptionTimer) return;
+    this.interruptionTimer = setTimeout(() => {
+      this.interruptionTimer = null;
+      const state: string = this.ctx?.state ?? "";
+      if (this.currentId && state !== "running") {
+        this.setInterrupted(true);
+      }
+    }, INTERRUPTION_CONFIRM_MS);
+  }
+
+  private clearMaybeInterruption() {
+    if (this.interruptionTimer) {
+      clearTimeout(this.interruptionTimer);
+      this.interruptionTimer = null;
     }
   }
 
@@ -274,13 +317,14 @@ export class AudioEngine {
    */
   handleMediaPause() {
     const state: string = this.ctx?.state ?? "";
-    const interruptedByCall =
-      this.wasInterrupted || state === "interrupted" || state === "suspended";
-    if (interruptedByCall && this.currentId) {
-      this.setInterrupted(true);
-      return; // keep it armed; resume() rebuilds when focus returns
+    if (state === "running") {
+      // Audio is genuinely playing, so this is a deliberate user pause.
+      this.fadeOutAndStop(2);
+      return;
     }
-    this.fadeOutAndStop(2);
+    // Focus is already lost (a call/system took it). Keep the sound armed and
+    // let the debounce decide whether it's sustained enough to be a call.
+    if (this.currentId) this.beginMaybeInterruption();
   }
 
   /**
@@ -503,6 +547,7 @@ export class AudioEngine {
   }
 
   stop(immediate = false) {
+    this.clearMaybeInterruption();
     this.setInterrupted(false);
     if (this.sleepTimer) {
       clearTimeout(this.sleepTimer);
