@@ -31,7 +31,7 @@ export default function HomePage() {
       null,
     isPlaying: engine.isPlaying,
     onPlay: handleMediaPlay,
-    onPause: engine.fadeStop,
+    onPause: engine.mediaPause,
     onStop: engine.stop,
   });
 
@@ -85,10 +85,17 @@ export default function HomePage() {
 
       <section className="above-veil mx-auto mt-3 flex w-full max-w-4xl shrink-0 flex-col items-center px-5 sm:mt-5">
         <div className="[@media(max-height:640px)]:hidden">
-          <BreathingOrb playing={engine.isPlaying} sound={engine.current} />
+          <BreathingOrb
+            playing={engine.isPlaying && !engine.interrupted}
+            sound={engine.current}
+          />
         </div>
         <p className="text-center text-balance text-sm text-white/55 sm:text-base [@media(max-height:640px)]:mt-0 [@media(min-height:641px)]:mt-4">
-          {engine.isPlaying && currentSound ? (
+          {engine.interrupted && currentSound ? (
+            <span className="text-white/80">
+              Paused for a call — {currentSound.label} resumes when it ends.
+            </span>
+          ) : engine.isPlaying && currentSound ? (
             <>
               <span className="text-white/85">{currentSound.label}</span>
               {" — "}

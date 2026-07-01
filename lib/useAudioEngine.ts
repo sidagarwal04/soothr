@@ -21,6 +21,7 @@ export function useAudioEngine() {
   const [timerMinutes, setTimerMinutes] = useState<number | null>(null);
   const [timerEndsAt, setTimerEndsAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [interrupted, setInterrupted] = useState(false);
 
   if (typeof window !== "undefined" && !engineRef.current) {
     engineRef.current = new AudioEngine();
@@ -42,6 +43,19 @@ export function useAudioEngine() {
     engineRef.current?.fadeOutAndStop(2);
     setCurrent(null);
     setTimerEndsAt(null);
+  }, []);
+
+  // Lock-screen pause. The engine decides whether it's a deliberate user pause
+  // (stop) or a call interruption (keep armed, auto-resume). We mirror whatever
+  // it did into React state.
+  const mediaPause = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.handleMediaPause();
+    if (engine.current === null) {
+      setCurrent(null);
+      setTimerEndsAt(null);
+    }
   }, []);
 
   const toggle = useCallback(
@@ -107,6 +121,12 @@ export function useAudioEngine() {
     }
   }, [now, timerEndsAt]);
 
+  // Surface call-interruption state to the UI (dim the orb, show "paused").
+  useEffect(() => {
+    engineRef.current?.setInterruptionListener(setInterrupted);
+    return () => engineRef.current?.setInterruptionListener(undefined);
+  }, []);
+
   // Re-arm the AudioContext after it gets suspended or interrupted — on tab
   // background/lock, and (the main case here) after a phone call takes audio
   // focus. A call can leave iOS "suspended" without firing a visibility
@@ -144,7 +164,9 @@ export function useAudioEngine() {
     play,
     stop,
     fadeStop,
+    mediaPause,
     toggle,
+    interrupted,
     timerMinutes,
     timerEndsAt,
     setTimer,

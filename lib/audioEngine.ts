@@ -89,6 +89,9 @@ export class AudioEngine {
   /** Set when the OS takes audio focus (an incoming/ongoing/outgoing call).
    *  We use it to rebuild + resume the sound once the interruption ends. */
   private wasInterrupted = false;
+  /** Notified whenever the interruption state flips, so the UI can show a
+   *  "paused for a call" state and dim the orb. */
+  private onInterruption?: (interrupted: boolean) => void;
 
   /** Fetch + decode a recorded loop, caching the decoded buffer by URL so it
    *  only downloads once per session. */
@@ -219,7 +222,7 @@ export class AudioEngine {
       // The OS pauses this element the moment a call grabs audio focus. If a
       // sound was playing, flag it as an interruption so we resume afterward.
       el.addEventListener("pause", () => {
-        if (this.currentId) this.wasInterrupted = true;
+        if (this.currentId) this.setInterrupted(true);
       });
       this.keepAliveAudio = el;
     } catch {
@@ -237,14 +240,47 @@ export class AudioEngine {
     if (!ctx) return;
     const state: string = ctx.state;
     if (state === "interrupted") {
-      if (this.currentId) this.wasInterrupted = true;
+      if (this.currentId) this.setInterrupted(true);
     } else if (state === "running") {
       if (this.wasInterrupted && this.currentId) {
         const id = this.currentId;
-        this.wasInterrupted = false;
+        this.setInterrupted(false);
         this.play(id);
       }
     }
+  }
+
+  /** Register a callback fired whenever the call-interruption state changes. */
+  setInterruptionListener(cb: ((interrupted: boolean) => void) | undefined) {
+    this.onInterruption = cb;
+  }
+
+  get interrupted() {
+    return this.wasInterrupted;
+  }
+
+  private setInterrupted(v: boolean) {
+    if (this.wasInterrupted === v) return;
+    this.wasInterrupted = v;
+    this.onInterruption?.(v);
+  }
+
+  /**
+   * Lock-screen / media-key pause handler. A phone call suspends or interrupts
+   * the context, so a pause arriving while audio is NOT running is treated as
+   * a call interruption: we keep the sound armed and let it auto-resume when
+   * the call ends. A pause while audio is genuinely running is a deliberate
+   * user pause, so we stop with a gentle fade as before.
+   */
+  handleMediaPause() {
+    const state: string = this.ctx?.state ?? "";
+    const interruptedByCall =
+      this.wasInterrupted || state === "interrupted" || state === "suspended";
+    if (interruptedByCall && this.currentId) {
+      this.setInterrupted(true);
+      return; // keep it armed; resume() rebuilds when focus returns
+    }
+    this.fadeOutAndStop(2);
   }
 
   /**
@@ -268,7 +304,7 @@ export class AudioEngine {
     // onStateChange handles the rebuild once "running" fires.)
     if (this.wasInterrupted && this.currentId && ctx.state === "running") {
       const id = this.currentId;
-      this.wasInterrupted = false;
+      this.setInterrupted(false);
       this.play(id);
     }
   }
@@ -467,7 +503,7 @@ export class AudioEngine {
   }
 
   stop(immediate = false) {
-    this.wasInterrupted = false;
+    this.setInterrupted(false);
     if (this.sleepTimer) {
       clearTimeout(this.sleepTimer);
       this.sleepTimer = null;
