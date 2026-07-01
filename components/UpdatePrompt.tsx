@@ -24,7 +24,7 @@ export function UpdatePrompt({ onRefresh, onDismiss }: Props) {
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-white/90">
-            A new version is ready
+            New version available
           </p>
           <p className="truncate text-xs text-white/55">
             Refresh to get the latest Soothr.
@@ -40,9 +40,9 @@ export function UpdatePrompt({ onRefresh, onDismiss }: Props) {
         <button
           type="button"
           onClick={onRefresh}
-          className="shrink-0 rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-night-900 shadow-md transition-transform active:scale-95"
+          className="shrink-0 whitespace-nowrap rounded-full bg-white px-3.5 py-1.5 text-xs font-semibold text-night-900 shadow-md transition-transform active:scale-95"
         >
-          Refresh
+          Refresh Now!
         </button>
       </div>
     </div>
