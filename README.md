@@ -63,6 +63,23 @@ npm start
 
 The service worker only registers in production builds.
 
+### Updates & offline
+
+The app is fully offline-capable: `public/sw.js` precaches the shell and every
+sound, and caches hashed build assets on first use.
+
+Updates are handled in two tiers via constants at the top of `public/sw.js`:
+
+- **`BUILD`** — bump on every deploy (any string change). Rotates the cache so
+  stale static files (sounds, icon, offline HTML) refresh. These updates install
+  and activate silently in the background; the new version is picked up on the
+  next launch, with no prompt and no interruption to playback.
+- **`APP_MAJOR`** — bump only for a big/breaking release. That release stays in
+  the "waiting" state and shows the user a "New version ready — Refresh" banner
+  instead of swapping in silently.
+
+Users never need to uninstall/reinstall the PWA.
+
 ## Deployment
 
 Deployed on [Netlify](https://soothr.netlify.app/). Netlify auto-detects the
