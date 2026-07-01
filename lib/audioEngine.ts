@@ -86,6 +86,9 @@ export class AudioEngine {
   private keepAliveAudio: HTMLAudioElement | null = null;
   private sampleCache = new Map<string, AudioBuffer>();
   private renderedCache = new Map<SoundId, AudioBuffer>();
+  /** Set when the OS takes audio focus (an incoming/ongoing/outgoing call).
+   *  We use it to rebuild + resume the sound once the interruption ends. */
+  private wasInterrupted = false;
 
   /** Fetch + decode a recorded loop, caching the decoded buffer by URL so it
    *  only downloads once per session. */
@@ -176,6 +179,12 @@ export class AudioEngine {
         .connect(this.ctx.destination);
 
       this.initSilentKeepAlive();
+
+      // A phone call (ringing, answered, or dialed) makes the OS take audio
+      // focus. WebKit surfaces this as an "interrupted" state; when the call
+      // ends the context sits "suspended" until we resume it. Track it so we
+      // can restore playback automatically.
+      this.ctx.addEventListener("statechange", () => this.onStateChange());
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
     return this.ctx;
@@ -207,6 +216,11 @@ export class AudioEngine {
       void el.play().catch(() => {
         /* user gesture missing on first call - retried on next play() */
       });
+      // The OS pauses this element the moment a call grabs audio focus. If a
+      // sound was playing, flag it as an interruption so we resume afterward.
+      el.addEventListener("pause", () => {
+        if (this.currentId) this.wasInterrupted = true;
+      });
       this.keepAliveAudio = el;
     } catch {
       /* MediaStream destination unsupported - background play will degrade */
@@ -214,14 +228,48 @@ export class AudioEngine {
   }
 
   /**
-   * Called when the page becomes visible again. iOS sometimes still suspends
-   * the context on lock; this re-arms it. Also re-starts the keep-alive
-   * element if iOS paused it during an interruption (incoming call, etc.).
+   * Reacts to AudioContext state transitions. On a call, WebKit moves the
+   * context to "interrupted"; when it returns to "running" we rebuild the
+   * sound the user left playing (a call can tear down the source nodes).
+   */
+  private onStateChange() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const state: string = ctx.state;
+    if (state === "interrupted") {
+      if (this.currentId) this.wasInterrupted = true;
+    } else if (state === "running") {
+      if (this.wasInterrupted && this.currentId) {
+        const id = this.currentId;
+        this.wasInterrupted = false;
+        this.play(id);
+      }
+    }
+  }
+
+  /**
+   * Called when the page becomes visible/focused again or the user interacts
+   * after an interruption. iOS leaves the context "suspended" (or
+   * "interrupted") after a call and pauses the keep-alive element; this
+   * re-arms both, and rebuilds the sound if a call had stopped it.
    */
   resume() {
-    if (this.ctx?.state === "suspended") void this.ctx.resume();
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const state: string = ctx.state;
+    if (state === "suspended" || state === "interrupted") {
+      void ctx.resume().catch(() => {});
+    }
     if (this.keepAliveAudio && this.keepAliveAudio.paused) {
       void this.keepAliveAudio.play().catch(() => {});
+    }
+    // If the context is already running again but a call had killed our
+    // sources, rebuild now. (When resume() only kicks off ctx.resume(),
+    // onStateChange handles the rebuild once "running" fires.)
+    if (this.wasInterrupted && this.currentId && ctx.state === "running") {
+      const id = this.currentId;
+      this.wasInterrupted = false;
+      this.play(id);
     }
   }
 
@@ -419,6 +467,7 @@ export class AudioEngine {
   }
 
   stop(immediate = false) {
+    this.wasInterrupted = false;
     if (this.sleepTimer) {
       clearTimeout(this.sleepTimer);
       this.sleepTimer = null;

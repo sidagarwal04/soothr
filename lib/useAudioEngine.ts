@@ -107,17 +107,25 @@ export function useAudioEngine() {
     }
   }, [now, timerEndsAt]);
 
-  // Re-arm the AudioContext when the tab becomes visible again — iOS can
-  // still suspend us under heavy memory pressure even with the keep-alive
-  // element, and Android browsers occasionally pause the context on lock.
+  // Re-arm the AudioContext after it gets suspended or interrupted — on tab
+  // background/lock, and (the main case here) after a phone call takes audio
+  // focus. A call can leave iOS "suspended" without firing a visibility
+  // change, so we also resume on window focus and on the next user gesture.
   useEffect(() => {
+    const resume = () => engineRef.current?.resume();
     const onVis = () => {
-      if (document.visibilityState === "visible") {
-        engineRef.current?.resume();
-      }
+      if (document.visibilityState === "visible") resume();
     };
     document.addEventListener("visibilitychange", onVis);
-    return () => document.removeEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", resume);
+    window.addEventListener("pageshow", resume);
+    window.addEventListener("pointerdown", resume);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", resume);
+      window.removeEventListener("pageshow", resume);
+      window.removeEventListener("pointerdown", resume);
+    };
   }, []);
 
   return {
