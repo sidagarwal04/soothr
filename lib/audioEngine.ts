@@ -54,6 +54,22 @@ export const SAMPLE_URLS: Partial<Record<SoundId, string>> = {
   wind: "/sounds/wind.mp3",
 };
 
+/**
+ * Periodic sounds (a fixed heartbeat cadence or a repeating melody) that used
+ * to be driven by JS `setInterval` look-ahead scheduling. Timers get throttled
+ * or frozen once the tab is backgrounded or the screen locks — the exact
+ * scenario this app runs in — so those sounds fell silent after a couple of
+ * minutes. Instead we pre-render a single seamless loop of each into an
+ * AudioBuffer once and play it with `loop = true`, so playback lives entirely
+ * in the audio thread and never depends on a JS timer firing.
+ */
+const RENDERED_LOOP_IDS = new Set<SoundId>([
+  "heartbeat",
+  "womb",
+  "lullaby",
+  "indianLullaby",
+]);
+
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -69,6 +85,7 @@ export class AudioEngine {
   private sleepTimer: ReturnType<typeof setTimeout> | null = null;
   private keepAliveAudio: HTMLAudioElement | null = null;
   private sampleCache = new Map<string, AudioBuffer>();
+  private renderedCache = new Map<SoundId, AudioBuffer>();
 
   /** Fetch + decode a recorded loop, caching the decoded buffer by URL so it
    *  only downloads once per session. */
@@ -84,10 +101,26 @@ export class AudioEngine {
     return decoded;
   }
 
+  /** Render (once, then cache) a seamless loop buffer for a periodic sound. */
+  private async loadRenderedLoop(id: SoundId): Promise<AudioBuffer> {
+    const cached = this.renderedCache.get(id);
+    if (cached) return cached;
+    const ctx = this.ensureContext();
+    const buffer = await renderLoopForId(id, ctx);
+    this.renderedCache.set(id, buffer);
+    return buffer;
+  }
+
   /** Warm the cache for a sound without playing it (e.g. on hover/tap-intent). */
   preload(id: SoundId) {
     const url = SAMPLE_URLS[id];
-    if (url) void this.loadSample(url).catch(() => {});
+    if (url) {
+      void this.loadSample(url).catch(() => {});
+      return;
+    }
+    if (RENDERED_LOOP_IDS.has(id)) {
+      void this.loadRenderedLoop(id).catch(() => {});
+    }
   }
 
   /** Lazily create the AudioContext on first user gesture. */
@@ -265,15 +298,22 @@ export class AudioEngine {
     output.gain.value = 0;
     output.connect(this.master!);
 
-    // Recorded sounds: load the decoded loop asynchronously, then start it and
-    // fade in. Guarded so a quick toggle to another sound before the buffer
-    // finishes loading won't leave an orphaned source playing.
+    // Buffer-backed sounds: either a recorded MP3 loop or a pre-rendered
+    // procedural loop. Load/render the buffer asynchronously, then start it
+    // looping and fade in. Guarded so a quick toggle to another sound before
+    // the buffer is ready won't leave an orphaned source playing.
     const sampleUrl = SAMPLE_URLS[id];
-    if (sampleUrl) {
+    const loadBuffer: (() => Promise<AudioBuffer>) | null = sampleUrl
+      ? () => this.loadSample(sampleUrl)
+      : RENDERED_LOOP_IDS.has(id)
+        ? () => this.loadRenderedLoop(id)
+        : null;
+
+    if (loadBuffer) {
       let stopped = false;
       let bufSource: AudioBufferSourceNode | null = null;
 
-      this.loadSample(sampleUrl)
+      loadBuffer()
         .then((buffer) => {
           if (stopped || this.currentId !== id) return;
           bufSource = ctx.createBufferSource();
@@ -348,18 +388,6 @@ export class AudioEngine {
         break;
       case "crickets":
         add(buildCrickets(ctx, output));
-        break;
-      case "heartbeat":
-        add(buildHeartbeat(ctx, output));
-        break;
-      case "womb":
-        add(buildWomb(ctx, output));
-        break;
-      case "lullaby":
-        add(buildLullaby(ctx, output));
-        break;
-      case "indianLullaby":
-        add(buildIndianLullaby(ctx, output));
         break;
     }
 
@@ -451,7 +479,7 @@ export class AudioEngine {
 /* -------------------------------------------------------------------------- */
 
 function makeNoiseBuffer(
-  ctx: AudioContext,
+  ctx: BaseAudioContext,
   type: "white" | "pink" | "brown",
   seconds = 6,
 ): AudioBuffer {
@@ -646,117 +674,6 @@ function buildOcean(ctx: AudioContext, out: AudioNode): BuildResult {
   ampLfo.start();
   dc.start();
   return { sources: [src, filtLfo, ampLfo, dc] };
-}
-
-function buildHeartbeat(ctx: AudioContext, out: AudioNode): BuildResult {
-  // Synthesize lub-dub at ~60 bpm using a low sine with a fast envelope.
-  // Events are queued in 2-minute chunks and refilled every minute via
-  // setInterval so a sleep timer of any length works correctly.
-  const bpm = 60;
-  const beat = 60 / bpm;
-
-  const gain = ctx.createGain();
-  gain.gain.value = 0;
-  gain.connect(out);
-
-  const osc = ctx.createOscillator();
-  osc.type = "sine";
-  osc.frequency.value = 60;
-  osc.connect(gain);
-
-  const sub = ctx.createOscillator();
-  sub.type = "sine";
-  sub.frequency.value = 35;
-  const subGain = ctx.createGain();
-  subGain.gain.value = 0.6;
-  sub.connect(subGain).connect(gain);
-
-  const thump = (t: number, amp: number) => {
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(amp, t + 0.015);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-  };
-
-  let nextStart = ctx.currentTime + 0.2;
-  const scheduleChunk = () => {
-    const end = nextStart + 120;
-    for (let t = nextStart; t < end; t += beat) {
-      thump(t, 0.9); // lub
-      thump(t + 0.32, 0.55); // dub
-    }
-    nextStart = end;
-  };
-  scheduleChunk();
-  const refill = setInterval(scheduleChunk, 60_000);
-
-  osc.start();
-  sub.start();
-  return {
-    sources: [osc, sub],
-    disposers: [() => clearInterval(refill)],
-  };
-}
-
-function buildWomb(ctx: AudioContext, out: AudioNode): BuildResult {
-  // Brown noise bed (whooshing) + soft low-passed heartbeat layer.
-  const whoosh = ctx.createBufferSource();
-  whoosh.buffer = makeNoiseBuffer(ctx, "brown");
-  whoosh.loop = true;
-  const whooshLP = ctx.createBiquadFilter();
-  whooshLP.type = "lowpass";
-  whooshLP.frequency.value = 500;
-  const whooshGain = ctx.createGain();
-  whooshGain.gain.value = 0.8;
-  whoosh.connect(whooshLP).connect(whooshGain).connect(out);
-
-  // Slow modulation on the whoosh, like blood flow.
-  const lfo = ctx.createOscillator();
-  lfo.frequency.value = 0.6;
-  const lfoGain = ctx.createGain();
-  lfoGain.gain.value = 0.2;
-  const dc = ctx.createConstantSource();
-  dc.offset.value = 0.7;
-  dc.connect(whooshGain.gain);
-  lfo.connect(lfoGain).connect(whooshGain.gain);
-
-  // Layered heartbeat — softer than the standalone one.
-  const heart = ctx.createGain();
-  heart.gain.value = 0;
-  const heartLP = ctx.createBiquadFilter();
-  heartLP.type = "lowpass";
-  heartLP.frequency.value = 120;
-  heart.connect(heartLP).connect(out);
-
-  const osc = ctx.createOscillator();
-  osc.type = "sine";
-  osc.frequency.value = 55;
-  osc.connect(heart);
-
-  const beat = 60 / 70; // 70 bpm
-  let nextStart = ctx.currentTime + 0.2;
-  const scheduleChunk = () => {
-    const end = nextStart + 120;
-    for (let t = nextStart; t < end; t += beat) {
-      heart.gain.setValueAtTime(0, t);
-      heart.gain.linearRampToValueAtTime(0.4, t + 0.02);
-      heart.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
-      heart.gain.setValueAtTime(0, t + 0.3);
-      heart.gain.linearRampToValueAtTime(0.25, t + 0.32);
-      heart.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
-    }
-    nextStart = end;
-  };
-  scheduleChunk();
-  const refill = setInterval(scheduleChunk, 60_000);
-
-  whoosh.start();
-  lfo.start();
-  dc.start();
-  osc.start();
-  return {
-    sources: [whoosh, lfo, dc, osc],
-    disposers: [() => clearInterval(refill)],
-  };
 }
 
 function buildVacuum(ctx: AudioContext, out: AudioNode): BuildResult {
@@ -957,73 +874,217 @@ function buildCrickets(ctx: AudioContext, out: AudioNode): BuildResult {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                                  Lullabies                                 */
+/*                          Pre-rendered seamless loops                       */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Music-box-style synthesis: a sine fundamental for warmth + a sine an
- * octave above for brightness, each note shaped with a quick attack and
- * long exponential decay so notes ring and bleed into each other gently.
- */
-function scheduleMelody(
-  ctx: AudioContext,
-  out: AudioNode,
-  melody: Array<[number, number]>, // [freqHz, beats]
-  beatDur: number,
-): BuildResult {
-  const noteGain = ctx.createGain();
-  noteGain.gain.value = 0;
-  noteGain.connect(out);
-
-  const fund = ctx.createOscillator();
-  fund.type = "sine";
-  const fundGain = ctx.createGain();
-  fundGain.gain.value = 0.7;
-  fund.connect(fundGain).connect(noteGain);
-
-  const high = ctx.createOscillator();
-  high.type = "sine";
-  const highGain = ctx.createGain();
-  highGain.gain.value = 0.25;
-  high.connect(highGain).connect(noteGain);
-
-  const totalLoopDur = melody.reduce((s, [, b]) => s + b * beatDur, 0);
-
-  const scheduleLoop = (loopStart: number) => {
-    let t = loopStart;
-    for (const [freq, beats] of melody) {
-      const dur = beats * beatDur;
-      fund.frequency.setValueAtTime(freq, t);
-      high.frequency.setValueAtTime(freq * 2, t);
-      noteGain.gain.setValueAtTime(0, t);
-      noteGain.gain.linearRampToValueAtTime(0.35, t + 0.025);
-      noteGain.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.92);
-      t += dur;
-    }
-  };
-
-  let nextLoop = ctx.currentTime + 0.3;
-  // Pre-fill enough loops to cover a 2-minute look-ahead.
-  while (nextLoop < ctx.currentTime + 120) {
-    scheduleLoop(nextLoop);
-    nextLoop += totalLoopDur;
-  }
-  const refill = setInterval(() => {
-    while (nextLoop < ctx.currentTime + 120) {
-      scheduleLoop(nextLoop);
-      nextLoop += totalLoopDur;
-    }
-  }, 60_000);
-
-  fund.start();
-  high.start();
-  return {
-    sources: [fund, high],
-    disposers: [() => clearInterval(refill)],
-  };
+/** Look up the OfflineAudioContext constructor (with the old webkit prefix). */
+function getOfflineCtor(): typeof OfflineAudioContext {
+  return (
+    window.OfflineAudioContext ||
+    (
+      window as unknown as {
+        webkitOfflineAudioContext: typeof OfflineAudioContext;
+      }
+    ).webkitOfflineAudioContext
+  );
 }
 
-function buildLullaby(ctx: AudioContext, out: AudioNode): BuildResult {
+/**
+ * Render `build` into a mono AudioBuffer that loops seamlessly.
+ *
+ * We render `loopSeconds + fadeSeconds` of audio, then fold the extra
+ * `fadeSeconds` tail (the audio that spills just past the loop point) back
+ * over the head with a linear crossfade. The returned buffer is exactly
+ * `loopSeconds` long, so `AudioBufferSourceNode.loop = true` repeats it with
+ * no click or gap at the seam.
+ */
+async function renderSeamlessLoop(
+  ctx: AudioContext,
+  loopSeconds: number,
+  fadeSeconds: number,
+  build: (octx: OfflineAudioContext, out: AudioNode, totalSeconds: number) => void,
+): Promise<AudioBuffer> {
+  const sampleRate = ctx.sampleRate;
+  const totalSeconds = loopSeconds + fadeSeconds;
+  const OfflineCtor = getOfflineCtor();
+  const octx = new OfflineCtor(
+    1,
+    Math.ceil(totalSeconds * sampleRate),
+    sampleRate,
+  );
+  build(octx, octx.destination, totalSeconds);
+  const rendered = await octx.startRendering();
+  const src = rendered.getChannelData(0);
+
+  const loopFrames = Math.floor(loopSeconds * sampleRate);
+  const fadeFrames = Math.min(Math.floor(fadeSeconds * sampleRate), loopFrames);
+
+  const out = ctx.createBuffer(1, loopFrames, sampleRate);
+  const dst = out.getChannelData(0);
+  for (let i = 0; i < loopFrames; i++) dst[i] = src[i];
+  for (let i = 0; i < fadeFrames; i++) {
+    const t = i / fadeFrames; // 0 → 1 across the crossfade
+    dst[i] = src[i] * t + src[loopFrames + i] * (1 - t);
+  }
+  return out;
+}
+
+function renderLoopForId(id: SoundId, ctx: AudioContext): Promise<AudioBuffer> {
+  switch (id) {
+    case "heartbeat":
+      return renderHeartbeatLoop(ctx);
+    case "womb":
+      return renderWombLoop(ctx);
+    case "lullaby":
+      return renderLullabyLoop(ctx);
+    case "indianLullaby":
+      return renderIndianLullabyLoop(ctx);
+    default:
+      // Should never happen — only RENDERED_LOOP_IDS reach here.
+      return renderHeartbeatLoop(ctx);
+  }
+}
+
+/** Lub-dub at 60 bpm — one beat per second, looped over several beats. */
+function renderHeartbeatLoop(ctx: AudioContext): Promise<AudioBuffer> {
+  const beat = 1; // 60 bpm ⇒ integer sine cycles per beat ⇒ clean loop
+  const beats = 8;
+  return renderSeamlessLoop(ctx, beat * beats, 0.4, (octx, out, total) => {
+    const gain = octx.createGain();
+    gain.gain.value = 0.0001;
+    gain.connect(out);
+
+    const osc = octx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = 60;
+    osc.connect(gain);
+
+    const sub = octx.createOscillator();
+    sub.type = "sine";
+    sub.frequency.value = 35;
+    const subGain = octx.createGain();
+    subGain.gain.value = 0.6;
+    sub.connect(subGain).connect(gain);
+
+    const thump = (t: number, amp: number) => {
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(amp, t + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    };
+    for (let t = 0; t < total; t += beat) {
+      thump(t, 0.9); // lub
+      thump(t + 0.32, 0.55); // dub
+    }
+
+    osc.start();
+    sub.start();
+  });
+}
+
+/** Brown-noise whoosh + soft heartbeat. 30 s keeps every component periodic. */
+function renderWombLoop(ctx: AudioContext): Promise<AudioBuffer> {
+  return renderSeamlessLoop(ctx, 30, 0.5, (octx, out, total) => {
+    const whoosh = octx.createBufferSource();
+    whoosh.buffer = makeNoiseBuffer(octx, "brown");
+    whoosh.loop = true;
+    const whooshLP = octx.createBiquadFilter();
+    whooshLP.type = "lowpass";
+    whooshLP.frequency.value = 500;
+    const whooshGain = octx.createGain();
+    whooshGain.gain.value = 0.8;
+    whoosh.connect(whooshLP).connect(whooshGain).connect(out);
+
+    // Slow modulation on the whoosh, like blood flow.
+    const lfo = octx.createOscillator();
+    lfo.frequency.value = 0.6;
+    const lfoGain = octx.createGain();
+    lfoGain.gain.value = 0.2;
+    const dc = octx.createConstantSource();
+    dc.offset.value = 0.7;
+    dc.connect(whooshGain.gain);
+    lfo.connect(lfoGain).connect(whooshGain.gain);
+
+    // Layered heartbeat — softer than the standalone one.
+    const heart = octx.createGain();
+    heart.gain.value = 0.0001;
+    const heartLP = octx.createBiquadFilter();
+    heartLP.type = "lowpass";
+    heartLP.frequency.value = 120;
+    heart.connect(heartLP).connect(out);
+
+    const osc = octx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = 55;
+    osc.connect(heart);
+
+    const beat = 60 / 70; // 70 bpm
+    for (let t = 0; t < total; t += beat) {
+      heart.gain.setValueAtTime(0.0001, t);
+      heart.gain.linearRampToValueAtTime(0.4, t + 0.02);
+      heart.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+      heart.gain.setValueAtTime(0.0001, t + 0.3);
+      heart.gain.linearRampToValueAtTime(0.25, t + 0.32);
+      heart.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    }
+
+    whoosh.start();
+    lfo.start();
+    dc.start();
+    osc.start();
+  });
+}
+
+/**
+ * Music-box-style synthesis: a sine fundamental for warmth + a sine an octave
+ * above for brightness, each note shaped with a quick attack and long
+ * exponential decay so notes ring and bleed into each other gently. The whole
+ * melody is rendered once and looped.
+ */
+function renderMelodyLoop(
+  ctx: AudioContext,
+  melody: Array<[number, number]>, // [freqHz, beats]
+  beatDur: number,
+): Promise<AudioBuffer> {
+  const loopSeconds = melody.reduce((s, [, b]) => s + b * beatDur, 0);
+  return renderSeamlessLoop(ctx, loopSeconds, 0.5, (octx, out, total) => {
+    const noteGain = octx.createGain();
+    noteGain.gain.value = 0.0001;
+    noteGain.connect(out);
+
+    const fund = octx.createOscillator();
+    fund.type = "sine";
+    const fundGain = octx.createGain();
+    fundGain.gain.value = 0.7;
+    fund.connect(fundGain).connect(noteGain);
+
+    const high = octx.createOscillator();
+    high.type = "sine";
+    const highGain = octx.createGain();
+    highGain.gain.value = 0.25;
+    high.connect(highGain).connect(noteGain);
+
+    let t = 0;
+    // Schedule at least one full loop, plus into the fade tail so the seam
+    // (a note's ring-out) folds cleanly back over the start.
+    while (t < total) {
+      for (const [freq, beats] of melody) {
+        if (t >= total) break;
+        const dur = beats * beatDur;
+        fund.frequency.setValueAtTime(freq, t);
+        high.frequency.setValueAtTime(freq * 2, t);
+        noteGain.gain.setValueAtTime(0.0001, t);
+        noteGain.gain.linearRampToValueAtTime(0.35, t + 0.025);
+        noteGain.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.92);
+        t += dur;
+      }
+    }
+
+    fund.start();
+    high.start();
+  });
+}
+
+function renderLullabyLoop(ctx: AudioContext): Promise<AudioBuffer> {
   // Twinkle, Twinkle, Little Star in C major.
   const C = 261.63,
     D = 293.66,
@@ -1039,10 +1100,10 @@ function buildLullaby(ctx: AudioContext, out: AudioNode): BuildResult {
     [C, 1], [C, 1], [G, 1], [G, 1], [A, 1], [A, 1], [G, 2],
     [F, 1], [F, 1], [E, 1], [E, 1], [D, 1], [D, 1], [C, 2],
   ];
-  return scheduleMelody(ctx, out, melody, 0.55);
+  return renderMelodyLoop(ctx, melody, 0.55);
 }
 
-function buildIndianLullaby(ctx: AudioContext, out: AudioNode): BuildResult {
+function renderIndianLullabyLoop(ctx: AudioContext): Promise<AudioBuffer> {
   // A simple pentatonic melody in Raga Bhupali — Sa Re Ga Pa Dha (C D E G A),
   // a peaceful evening raga associated with devotion and sleep. No semitones,
   // so it never feels harsh; the phrases sway between Pa (G) and Sa (C).
@@ -1062,5 +1123,5 @@ function buildIndianLullaby(ctx: AudioContext, out: AudioNode): BuildResult {
     [E, 1], [D, 1], [E, 1], [G, 1],
     [E, 1], [D, 1], [C, 1], [C, 2],
   ];
-  return scheduleMelody(ctx, out, melody, 0.7);
+  return renderMelodyLoop(ctx, melody, 0.7);
 }

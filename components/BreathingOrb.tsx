@@ -32,7 +32,7 @@ export function BreathingOrb({ playing, sound }: Props) {
     : (["#b9a7ff", "#4f44c7"] as const);
 
   return (
-    <div className="relative grid h-56 w-56 place-items-center sm:h-72 sm:w-72">
+    <div className="relative grid h-36 w-36 place-items-center sm:h-52 sm:w-52">
       {/* Outer halo */}
       <div
         className={`absolute inset-0 rounded-full blur-3xl transition-opacity duration-1000 ${
@@ -44,7 +44,7 @@ export function BreathingOrb({ playing, sound }: Props) {
       />
       {/* Mid ring */}
       <div
-        className={`absolute inset-6 rounded-full blur-xl transition-opacity duration-1000 ${
+        className={`absolute inset-4 rounded-full blur-xl transition-opacity duration-1000 ${
           playing ? "opacity-90 animate-breathe" : "opacity-40"
         }`}
         style={{
@@ -53,7 +53,7 @@ export function BreathingOrb({ playing, sound }: Props) {
       />
       {/* Core */}
       <div
-        className={`relative h-32 w-32 rounded-full sm:h-40 sm:w-40 ${
+        className={`relative h-20 w-20 rounded-full sm:h-28 sm:w-28 ${
           playing ? "animate-breathe" : ""
         }`}
         style={{

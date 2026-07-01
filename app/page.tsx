@@ -58,8 +58,8 @@ export default function HomePage() {
   const currentSound = SOUNDS.find((s) => s.id === engine.current) ?? null;
 
   return (
-    <main className="relative min-h-[100dvh] pb-44">
-      <header className="above-veil mx-auto flex max-w-4xl items-center justify-between px-5 pt-7 sm:pt-10">
+    <main className="relative min-h-[100dvh] pb-32">
+      <header className="above-veil mx-auto flex max-w-4xl items-center justify-between px-5 pt-5 sm:pt-7">
         <div className="flex items-center gap-3">
           <div className="relative h-10 w-10">
             <div className="absolute inset-0 rounded-full bg-gradient-to-br from-glow-lavender to-dusk-500 blur-md opacity-70" />
@@ -77,9 +77,9 @@ export default function HomePage() {
         <NightModeToggle night={night} onToggle={() => setNight((n) => !n)} />
       </header>
 
-      <section className="above-veil mx-auto mt-6 flex max-w-4xl flex-col items-center px-5 sm:mt-10">
+      <section className="above-veil mx-auto mt-3 flex max-w-4xl flex-col items-center px-5 sm:mt-6">
         <BreathingOrb playing={engine.isPlaying} sound={engine.current} />
-        <p className="mt-6 text-center text-balance text-sm text-white/55 sm:text-base">
+        <p className="mt-4 text-center text-balance text-sm text-white/55 sm:text-base">
           {engine.isPlaying && currentSound ? (
             <>
               <span className="text-white/85">{currentSound.label}</span>
@@ -93,7 +93,7 @@ export default function HomePage() {
         <SafetyHint active={engine.isPlaying} />
       </section>
 
-      <section className="above-veil mx-auto mt-10 grid max-w-4xl grid-cols-2 gap-3 px-5 sm:grid-cols-4 sm:gap-4">
+      <section className="above-veil mx-auto mt-5 grid max-w-4xl grid-cols-4 gap-2.5 px-5 sm:mt-6 sm:gap-3 md:grid-cols-8">
         {SOUNDS.map((s) => (
           <SoundCard
             key={s.id}
@@ -104,7 +104,7 @@ export default function HomePage() {
         ))}
       </section>
 
-      <section className="above-veil mx-auto mt-8 max-w-4xl px-5">
+      <section className="above-veil mx-auto mt-5 max-w-4xl px-5 sm:mt-6">
         <SleepTimer
           currentMinutes={engine.timerMinutes}
           endsAt={engine.timerEndsAt}
