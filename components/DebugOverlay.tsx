@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 interface DebugInfo {
   ctxState: string;
+  output: string;
   keepAlivePaused: boolean | null;
   interrupted: boolean;
   pending: boolean;
@@ -37,7 +38,8 @@ export function DebugOverlay({ read }: Props) {
     <div className="above-veil fixed left-2 top-2 z-[60] max-w-[92vw] rounded-xl bg-black/80 p-3 font-mono text-[10px] leading-tight text-lime-300 shadow-2xl ring-1 ring-white/10 backdrop-blur">
       <div className="mb-1 flex flex-wrap gap-x-3 gap-y-0.5 text-white/90">
         <span>ctx: <b className="text-lime-300">{info.ctxState}</b></span>
-        <span>keepAlivePaused: <b>{String(info.keepAlivePaused)}</b></span>
+        <span>out: <b className="text-cyan-300">{info.output}</b></span>
+        <span>elPaused: <b>{String(info.keepAlivePaused)}</b></span>
         <span>interrupted: <b>{String(info.interrupted)}</b></span>
         <span>pending: <b>{String(info.pending)}</b></span>
         <span>vis: <b>{info.visibility}</b></span>

@@ -76,6 +76,37 @@ const RENDERED_LOOP_IDS = new Set<SoundId>([
   "indianLullaby",
 ]);
 
+/**
+ * Whether to route audio through a MediaStream <audio> element instead of
+ * straight to the speakers.
+ *
+ * On Android a pure-WebAudio graph doesn't participate in system audio focus,
+ * so an incoming/answered call never pauses it. Playing the audio through an
+ * <audio> element makes Android treat it as media, so it's paused on a call
+ * and auto-resumed afterward. iOS's existing direct-output + silent-keep-alive
+ * path already handles interruptions, and routing real audio through a
+ * MediaStream element there is unreliable, so we keep iOS on the direct path.
+ * A localStorage override (`soothr.output` = "element" | "direct") allows
+ * forcing either path for testing.
+ */
+function shouldUseElementOutput(): boolean {
+  try {
+    const forced = localStorage.getItem("soothr.output");
+    if (forced === "element") return true;
+    if (forced === "direct") return false;
+  } catch {
+    /* localStorage unavailable */
+  }
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const isAndroid = /Android/i.test(ua);
+  const isIOS =
+    /iPad|iPhone|iPod/i.test(ua) ||
+    // iPadOS 13+ reports as Mac; treat touch Macs as iOS.
+    (/Macintosh/i.test(ua) && "ontouchend" in document);
+  return isAndroid && !isIOS;
+}
+
 export class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -90,6 +121,12 @@ export class AudioEngine {
   private volume = DEFAULT_VOLUME;
   private sleepTimer: ReturnType<typeof setTimeout> | null = null;
   private keepAliveAudio: HTMLAudioElement | null = null;
+  /** On Android, audio is routed through keepAliveAudio (a MediaStream element)
+   *  so the OS focus-manages it and pauses it on calls. */
+  private useElementOutput = shouldUseElementOutput();
+  /** True if element playback failed and we fell back to direct speaker output
+   *  (so we don't double up audio by also replaying the element). */
+  private fellBackToDestination = false;
   private sampleCache = new Map<string, AudioBuffer>();
   private renderedCache = new Map<SoundId, AudioBuffer>();
   /** Set when the OS takes audio focus (an incoming/ongoing/outgoing call).
@@ -110,6 +147,11 @@ export class AudioEngine {
   getDebugInfo() {
     return {
       ctxState: (this.ctx?.state as string) ?? "none",
+      output: this.useElementOutput
+        ? this.fellBackToDestination
+          ? "element→fallback"
+          : "element"
+        : "direct",
       keepAlivePaused: this.keepAliveAudio ? this.keepAliveAudio.paused : null,
       interrupted: this.wasInterrupted,
       pending: this.interruptionTimer !== null,
@@ -208,10 +250,16 @@ export class AudioEngine {
         .connect(this.highShelf)
         .connect(this.lowPass)
         .connect(this.dcBlock)
-        .connect(this.limiter)
-        .connect(this.ctx.destination);
+        .connect(this.limiter);
 
-      this.initSilentKeepAlive();
+      if (this.useElementOutput) {
+        this.log("output mode: element (Android)");
+        this.setupElementOutput(this.limiter);
+      } else {
+        this.log("output mode: direct");
+        this.limiter.connect(this.ctx.destination);
+        this.initSilentKeepAlive();
+      }
 
       // A phone call (ringing, answered, or dialed) makes the OS take audio
       // focus. WebKit surfaces this as an "interrupted" state; when the call
@@ -249,24 +297,79 @@ export class AudioEngine {
       void el.play().catch(() => {
         /* user gesture missing on first call - retried on next play() */
       });
-      // The OS pauses this element when something grabs audio focus. That's a
-      // notification duck just as often as a call, so don't react immediately:
-      // start the debounce and try to resume right away. Only a focus loss
-      // that outlasts the debounce window is treated as a call.
-      el.addEventListener("pause", () => {
-        this.log("keepAlive pause");
-        if (!this.currentId) return;
-        this.beginMaybeInterruption();
-        void el.play().catch(() => {});
-      });
-      el.addEventListener("play", () => {
-        this.log(`keepAlive play (ctx ${this.ctx?.state ?? "?"})`);
-        if (this.ctx?.state === "running") this.clearMaybeInterruption();
-      });
+      this.attachOutputListeners(el);
       this.keepAliveAudio = el;
     } catch {
       /* MediaStream destination unsupported - background play will degrade */
     }
+  }
+
+  /**
+   * Android output path: route the real audio through a MediaStream <audio>
+   * element so the OS focus-manages it (pausing on calls). This element doubles
+   * as the keep-alive. If it can't start, fall back to direct speaker output so
+   * sound is never lost (at the cost of call auto-pause).
+   */
+  private setupElementOutput(source: AudioNode) {
+    if (!this.ctx || this.keepAliveAudio) return;
+    try {
+      const dest = this.ctx.createMediaStreamDestination();
+      source.connect(dest);
+
+      const el = new Audio();
+      el.srcObject = dest.stream;
+      el.preload = "auto";
+      (el as HTMLMediaElement & { playsInline?: boolean }).playsInline = true;
+      el.play()
+        .then(() => this.log("element-output: playing"))
+        .catch(() => {
+          this.log("element-output: play failed → direct fallback");
+          this.fellBackToDestination = true;
+          try {
+            source.connect(this.ctx!.destination);
+          } catch {
+            /* ignore */
+          }
+        });
+      this.attachOutputListeners(el);
+      this.keepAliveAudio = el;
+    } catch {
+      // MediaStream destination unsupported — go direct so audio still works.
+      this.fellBackToDestination = true;
+      try {
+        source.connect(this.ctx.destination);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /**
+   * The OS pauses the output/keep-alive element when something grabs audio
+   * focus — a notification duck just as often as a call. So we don't react
+   * instantly: start the debounce and (in silent keep-alive mode) try to
+   * resume right away. Only a focus loss that outlasts the debounce window is
+   * treated as a call. When the element plays again, the interruption clears.
+   */
+  private attachOutputListeners(el: HTMLAudioElement) {
+    el.addEventListener("pause", () => {
+      this.log(`output pause (ctx ${this.ctx?.state ?? "?"})`);
+      if (!this.currentId) return;
+      this.beginMaybeInterruption();
+      // The silent keep-alive carries no audio, so replaying it can't fight a
+      // call; do so to recover instantly from transient ducks. In element mode
+      // we let the OS manage focus (replaying would fight a real call).
+      if (!this.useElementOutput) void el.play().catch(() => {});
+    });
+    el.addEventListener("play", () => {
+      this.log(`output play (ctx ${this.ctx?.state ?? "?"})`);
+      this.clearMaybeInterruption();
+      // In element mode the audio stream is continuous, so playback resumes
+      // seamlessly — just clear the "paused for a call" state.
+      if (this.useElementOutput && this.wasInterrupted) {
+        this.setInterrupted(false);
+      }
+    });
   }
 
   /**
@@ -306,7 +409,13 @@ export class AudioEngine {
     this.interruptionTimer = setTimeout(() => {
       this.interruptionTimer = null;
       const state: string = this.ctx?.state ?? "";
-      if (this.currentId && state !== "running") {
+      // In element mode the AudioContext stays "running" through a call; the
+      // real signal is the output element still being paused. In direct mode
+      // the context itself goes suspended/interrupted.
+      const stillGone = this.useElementOutput
+        ? (this.keepAliveAudio?.paused ?? false)
+        : state !== "running";
+      if (this.currentId && stillGone) {
         this.log(`confirmed call (ctx ${state})`);
         this.setInterrupted(true);
       } else {
@@ -348,6 +457,15 @@ export class AudioEngine {
   handleMediaPause() {
     const state: string = this.ctx?.state ?? "";
     this.log(`mediaSession pause (ctx ${state})`);
+    // In element mode the AudioContext is always "running" (audio lives in the
+    // element), so we can't use ctx state to tell a call from a manual pause.
+    // The element's own pause/play + debounce already drive interruptions, so
+    // just arm the debounce and let playback auto-resume — matching the
+    // requested "pause for a call, auto-resume" behavior.
+    if (this.useElementOutput) {
+      if (this.currentId) this.beginMaybeInterruption();
+      return;
+    }
     if (state === "running") {
       // Audio is genuinely playing, so this is a deliberate user pause.
       this.fadeOutAndStop(2);
@@ -372,12 +490,20 @@ export class AudioEngine {
     if (state === "suspended" || state === "interrupted") {
       void ctx.resume().catch(() => {});
     }
-    if (this.keepAliveAudio && this.keepAliveAudio.paused) {
+    if (
+      this.keepAliveAudio &&
+      this.keepAliveAudio.paused &&
+      !this.fellBackToDestination
+    ) {
       void this.keepAliveAudio.play().catch(() => {});
     }
-    // If the context is already running again but a call had killed our
-    // sources, rebuild now. (When resume() only kicks off ctx.resume(),
-    // onStateChange handles the rebuild once "running" fires.)
+    // In element mode the audio stream is continuous and the context never
+    // stopped — replaying the element above restores sound, and its "play"
+    // listener clears the interrupted flag. No rebuild needed.
+    if (this.useElementOutput) return;
+    // Direct mode: if the context is already running again but a call had
+    // killed our sources, rebuild now. (When resume() only kicks off
+    // ctx.resume(), onStateChange handles the rebuild once "running" fires.)
     if (this.wasInterrupted && this.currentId && ctx.state === "running") {
       const id = this.currentId;
       this.setInterrupted(false);
