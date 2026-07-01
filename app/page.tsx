@@ -12,11 +12,34 @@ import { SleepTimer } from "@/components/SleepTimer";
 import { NightModeToggle } from "@/components/NightModeToggle";
 import { SoundTuner } from "@/components/SoundTuner";
 import { SafetyHint } from "@/components/SafetyHint";
+import { DebugOverlay } from "@/components/DebugOverlay";
 
 export default function HomePage() {
   const engine = useAudioEngine();
   const [night, setNight] = useState(false);
   const [tunerOpen, setTunerOpen] = useState(false);
+  const [debug, setDebug] = useState(false);
+
+  // Debug overlay: ?debug=1 turns it on (and persists so it survives inside the
+  // installed PWA, where you can't edit the URL); ?debug=0 turns it off.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("debug")) {
+      const on = params.get("debug") !== "0";
+      try {
+        localStorage.setItem("soothr.debug", on ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      setDebug(on);
+      return;
+    }
+    try {
+      setDebug(localStorage.getItem("soothr.debug") === "1");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useWakeLock(engine.isPlaying);
 
@@ -151,6 +174,8 @@ export default function HomePage() {
         tunerOpen={tunerOpen}
         onToggleTuner={() => setTunerOpen((o) => !o)}
       />
+
+      {debug && <DebugOverlay read={engine.getDebug} />}
     </main>
   );
 }

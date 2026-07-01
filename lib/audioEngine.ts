@@ -97,6 +97,28 @@ export class AudioEngine {
   private wasInterrupted = false;
   /** Debounce timer: only a sustained focus loss is treated as a call. */
   private interruptionTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Rolling diagnostic log (surfaced by the ?debug=1 overlay). */
+  private debugLog: string[] = [];
+
+  private log(msg: string) {
+    const t = new Date().toLocaleTimeString();
+    this.debugLog.push(`${t}  ${msg}`);
+    if (this.debugLog.length > 16) this.debugLog.shift();
+  }
+
+  /** Live snapshot for the on-screen diagnostic overlay. */
+  getDebugInfo() {
+    return {
+      ctxState: (this.ctx?.state as string) ?? "none",
+      keepAlivePaused: this.keepAliveAudio ? this.keepAliveAudio.paused : null,
+      interrupted: this.wasInterrupted,
+      pending: this.interruptionTimer !== null,
+      currentId: this.currentId,
+      visibility:
+        typeof document !== "undefined" ? document.visibilityState : "n/a",
+      log: [...this.debugLog].reverse(),
+    };
+  }
   /** Notified whenever the interruption state flips, so the UI can show a
    *  "paused for a call" state and dim the orb. */
   private onInterruption?: (interrupted: boolean) => void;
@@ -232,11 +254,13 @@ export class AudioEngine {
       // start the debounce and try to resume right away. Only a focus loss
       // that outlasts the debounce window is treated as a call.
       el.addEventListener("pause", () => {
+        this.log("keepAlive pause");
         if (!this.currentId) return;
         this.beginMaybeInterruption();
         void el.play().catch(() => {});
       });
       el.addEventListener("play", () => {
+        this.log(`keepAlive play (ctx ${this.ctx?.state ?? "?"})`);
         if (this.ctx?.state === "running") this.clearMaybeInterruption();
       });
       this.keepAliveAudio = el;
@@ -254,6 +278,7 @@ export class AudioEngine {
     const ctx = this.ctx;
     if (!ctx) return;
     const state: string = ctx.state;
+    this.log(`ctx → ${state}`);
     if (state === "running") {
       // Focus is back. Cancel any pending interruption (it was a transient
       // duck like a notification) and, if a real call had been confirmed,
@@ -277,11 +302,15 @@ export class AudioEngine {
    *  INTERRUPTION_CONFIRM_MS — transient ducks recover and cancel it first. */
   private beginMaybeInterruption() {
     if (this.wasInterrupted || this.interruptionTimer) return;
+    this.log("maybe-interrupt: start timer");
     this.interruptionTimer = setTimeout(() => {
       this.interruptionTimer = null;
       const state: string = this.ctx?.state ?? "";
       if (this.currentId && state !== "running") {
+        this.log(`confirmed call (ctx ${state})`);
         this.setInterrupted(true);
+      } else {
+        this.log(`transient, ignored (ctx ${state})`);
       }
     }, INTERRUPTION_CONFIRM_MS);
   }
@@ -304,6 +333,7 @@ export class AudioEngine {
 
   private setInterrupted(v: boolean) {
     if (this.wasInterrupted === v) return;
+    this.log(`interrupted = ${v}`);
     this.wasInterrupted = v;
     this.onInterruption?.(v);
   }
@@ -317,6 +347,7 @@ export class AudioEngine {
    */
   handleMediaPause() {
     const state: string = this.ctx?.state ?? "";
+    this.log(`mediaSession pause (ctx ${state})`);
     if (state === "running") {
       // Audio is genuinely playing, so this is a deliberate user pause.
       this.fadeOutAndStop(2);
@@ -337,6 +368,7 @@ export class AudioEngine {
     const ctx = this.ctx;
     if (!ctx) return;
     const state: string = ctx.state;
+    this.log(`resume() called (ctx ${state}, vis ${typeof document !== "undefined" ? document.visibilityState : "?"})`);
     if (state === "suspended" || state === "interrupted") {
       void ctx.resume().catch(() => {});
     }

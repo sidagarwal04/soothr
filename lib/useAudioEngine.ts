@@ -66,6 +66,8 @@ export function useAudioEngine() {
     [current, play, stop],
   );
 
+  const getDebug = useCallback(() => engineRef.current?.getDebugInfo() ?? null, []);
+
   const setVolume = useCallback((v: number) => {
     engineRef.current?.setVolume(v);
     setVolumeState(v);
@@ -167,6 +169,7 @@ export function useAudioEngine() {
     mediaPause,
     toggle,
     interrupted,
+    getDebug,
     timerMinutes,
     timerEndsAt,
     setTimer,
