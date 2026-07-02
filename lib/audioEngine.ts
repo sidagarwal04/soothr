@@ -28,8 +28,27 @@ const FADE = 0.6; // seconds — gentle attack/release so playback feels soft
 /** How long audio focus must stay lost before we treat it as a real call
  *  (and pause + auto-resume). Short ducks — notifications, a keyboard click,
  *  a maps voice prompt — recover well within this window and are ignored, so
- *  background playback is never interrupted by them. */
+ *  background playback is never interrupted by them.
+ *
+ *  Two windows because the two call-detection paths have very different
+ *  signal quality:
+ *
+ *  - Direct/iOS reads the AudioContext's own `interrupted`/`suspended` state,
+ *    which the OS only sets for a genuine interruption, so a short window is
+ *    both safe and responsive.
+ *
+ *  - The Android sentinel infers focus loss from a silent <audio> element's
+ *    `pause` event, which fires for *any* app grabbing focus — an incoming
+ *    notification with sound, a system beep, Assistant, another app's short
+ *    clip. On a locked screen these are common, each lasts a few seconds, and
+ *    Android releases focus (auto-resuming the sentinel) once they finish. A
+ *    short window misreads them as a call and needlessly suspends playback,
+ *    which is the "stops then resumes on its own" dropout. So the sentinel
+ *    window is long enough to outlast those transients; only a sustained loss
+ *    (a real call, which holds focus for its whole duration) is treated as an
+ *    interruption. */
 const INTERRUPTION_CONFIRM_MS = 1500;
+const SENTINEL_CONFIRM_MS = 6000;
 
 /** Defaults chosen to be safe for infant ears at typical phone-speaker SPL.
  * The volume default (0.3) is roughly -10 dB of digital gain — about half
@@ -386,10 +405,23 @@ export class AudioEngine {
       this.log(`sentinel pause (ctx ${this.ctx?.state ?? "?"})`);
       if (!this.currentId) return;
       this.beginMaybeInterruption();
-      // The iOS keep-alive carries no audio, so replaying it can't fight a call
-      // and recovers instantly from transient ducks. The Android sentinel must
-      // stay paused during a call, so we let the OS manage its focus.
-      if (!this.useElementOutput) void el.play().catch(() => {});
+      if (!this.useElementOutput) {
+        // The iOS keep-alive carries no audio, so replaying it can't fight a
+        // call and recovers instantly from transient ducks.
+        void el.play().catch(() => {});
+      } else {
+        // Android: the sentinel is also paused by transient focus losses
+        // (notifications, system sounds), not just calls. Try to revive it
+        // shortly. During a real call the OS denies play() so it stays paused
+        // and the debounce still catches the call; but for a transient loss
+        // this restores the sentinel fast, cancelling the pending interruption
+        // so playback is never suspended. Skipped once a call is confirmed.
+        setTimeout(() => {
+          if (this.currentId && !this.wasInterrupted && el.paused) {
+            void el.play().catch(() => {});
+          }
+        }, 500);
+      }
     });
     el.addEventListener("play", () => {
       this.log(`sentinel play (ctx ${this.ctx?.state ?? "?"})`);
@@ -435,7 +467,10 @@ export class AudioEngine {
    *  INTERRUPTION_CONFIRM_MS — transient ducks recover and cancel it first. */
   private beginMaybeInterruption() {
     if (this.wasInterrupted || this.interruptionTimer) return;
-    this.log("maybe-interrupt: start timer");
+    const confirmMs = this.useElementOutput
+      ? SENTINEL_CONFIRM_MS
+      : INTERRUPTION_CONFIRM_MS;
+    this.log(`maybe-interrupt: start timer (${confirmMs}ms)`);
     this.interruptionTimer = setTimeout(() => {
       this.interruptionTimer = null;
       const state: string = this.ctx?.state ?? "";
@@ -457,7 +492,7 @@ export class AudioEngine {
       } else {
         this.log(`transient, ignored (ctx ${state})`);
       }
-    }, INTERRUPTION_CONFIRM_MS);
+    }, confirmMs);
   }
 
   private clearMaybeInterruption() {
